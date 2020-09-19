@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import NamedTuple, List, Set
 from enum import Enum
 from dataclasses import dataclass
+import hashlib
+import re
 
 log_file = None
 log_fh = None
@@ -77,8 +79,25 @@ class Counter:
         self.errored += other.errored
         return self
 
+def sanitize_filename(name: str) -> str:
+    """
+    Remove "bad" characters from a filename. Right now just punctuation that Windows doesn't like
+    If any chars are removed, we append _{hash} so that we don't accidentally clobber other files
+    since eg `Model 1/2` and `Model 1 2` would otherwise have the same name
+    """
+    # this list of characters is just from trying to rename a file in Explorer (on Windows)
+    # I think the actual requirements are per fileystem and will be different on Mac
+    # I'm not sure how other unicode chars are handled
+    with_replacement = re.sub(r'[\\/*?<>|]', ' ', name)
+    if name == with_replacement:
+        return name
+    log(f'filename `{name}` contained bad chars, replacing by `{with_replacement}`')
+    hash = hashlib.sha256(name.encode()).hexdigest()[:8]
+    return f'{with_replacement}_{hash}'
+
 def export_filename(ctx: Ctx, format: Format, file):
-    name = f'{file.name}_v{file.versionNumber}.{format.value}'
+    sanitized = sanitize_filename(file.name)
+    name = f'{sanitized}_v{file.versionNumber}.{format.value}'
     return ctx.folder / name
 
 def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
