@@ -1,4 +1,4 @@
-This is a Fusion 360 Script to bulk export your files. Currently will export `f3d` files to `f3d`, `igs`, `stp`, `smt`, `sat` and `stl`. NOTE:  Only visible bodies are included in exports to all file formats except `f3d`.
+This is a Fusion 360 Script to bulk export your files. Currently will export `f3d` files to `f3d`, `igs`, `stp`, `smt`, `sat` and `stl`.
 
 # Installation
 
@@ -20,6 +20,7 @@ This is a Fusion 360 Script to bulk export your files. Currently will export `f3
 1) Directory: This defaults to a folder called Fusion360Exports on your desktop. Sorry about the teeny tiny text input size for this; I can't figure out how to resize it
 2) File types: Select the export file types you want for each file
 3) Projects: Select the projects you want to work on
+4) Unhide All: When checked, it will unhide all components and all bodies (recursively) so that the exported files contain all bodies
 
 # Operation
 
@@ -35,4 +36,4 @@ It will create a log file at `<export_directory>/<timestamp>.txt` that should ha
 
 1) Not tested with drawings. I couldn't find anyting about exporting to DXF in the API docs
 2) Not sure what other file types are out there (simulation data maybe? etc) but it only handles `.f3d` documents
-3) Only visible bodies are included in exports to all file formats except `f3d`.
+3) Only visible bodies are included in exports to all file formats except `f3d`. Use the "Unhide All" option to unhide them before exporting

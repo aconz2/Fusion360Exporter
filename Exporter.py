@@ -43,6 +43,7 @@ class Ctx(NamedTuple):
     formats: List[Format]
     app: adsk.core.Application
     projects: Set[str]
+    unhide_all: bool
 
 class LazyDocument:
     def __init__(self, ctx, file):
@@ -53,9 +54,12 @@ class LazyDocument:
     def open(self):
         if self._document is not None:
             return
-        log(f'Opening {self._file.name}')
+        log(f'Opening `{self._file.name}`')
         self._document = self._ctx.app.documents.open(self._file)
         self._document.activate()
+
+        if self._ctx.unhide_all:
+            unhide_all_in_document(self._document)
 
     def close(self):
         if self._document is None:
@@ -80,6 +84,28 @@ class Counter:
         self.skipped += other.skipped
         self.errored += other.errored
         return self
+
+def design_from_document(document: adsk.core.Document):
+    return adsk.fusion.FusionDocument.cast(document).design
+
+def unhide_all_in_document(document: adsk.core.Document):
+    unhide_all_in_component(design_from_document(document).rootComponent)
+
+def unhide_all_in_component(component):
+    component.isBodiesFolderLightBulbOn = True
+    component.isSketchFolderLightBulbOn = True
+
+    for i in range(component.bRepBodies.count):
+        component.bRepBodies.item(i).isLightBulbOn = True
+
+    for i in range(component.meshBodies.count):
+        component.meshBodies.item(i).isLightBulbOn = True
+
+    # I find the name occurrences very confusing, but apparently that is what a sub-component is called
+    for i in range(component.occurrences.count):
+        occurrence = component.occurrences.item(i)
+        occurrence.isLightBulbOn = True
+        unhide_all_in_component(occurrence.component)
 
 def sanitize_filename(name: str) -> str:
     """
@@ -116,7 +142,7 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
 
     # I'm just taking this from here https://github.com/tapnair/apper/blob/master/apper/Fusion360Utilities.py
     # is there a nicer way to do this??
-    design = doc._document.products.itemByProductType('DesignProductType')
+    design = design_from_document(doc._document)
     em = design.exportManager
     
     # leaving this ugly, not sure what else there might be to handle per format
@@ -210,6 +236,8 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             li = li.listItems
             for project in adsk.core.Application.get().data.dataProjects:
                 li.add(project.name, True)
+
+            inputs.addBoolValueInput('unhide_all', 'Unhide All Bodies', True, '', True)
         except:
             adsk.core.Application.get().userInterface.messageBox(traceback.format_exc())
 
@@ -242,6 +270,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 folder = Path(inputs.itemById('directory').value),
                 formats = [FormatFromName[x] for x in selected(inputs.itemById('file_types').listItems)],
                 projects = set(selected(inputs.itemById('projects').listItems)),
+                unhide_all = inputs.itemById('unhide_all').value,
             )
 
             try:
