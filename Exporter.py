@@ -31,6 +31,8 @@ class Format(Enum):
     STEP = 'step'
     STL = 'stl'
     IGES = 'igs'
+    SAT = 'sat'
+    SMT = 'smt'
 
 FormatFromName = {x.value: x for x in Format}
 
@@ -126,6 +128,10 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
         options = em.createSTEPExportOptions(str(output_path))
     elif format == Format.IGES:
         options = em.createIGESExportOptions(str(output_path))
+    elif format == Format.SAT:
+        options = em.createSATExportOptions(str(output_path))
+    elif format == Format.SMT:
+        options = em.createSMTExportOptions(str(output_path))
     else:
         raise Exception(f'Got unknown export format {format}')
 
