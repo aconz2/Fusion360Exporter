@@ -163,6 +163,8 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
         try:
             cmd = args.command
 
+            cmd.setDialogInitialSize(600, 400)
+
             onExecute = ExporterCommandExecuteHandler()
             cmd.execute.add(onExecute)
             onDestroy = ExporterCommandDestroyHandler()
