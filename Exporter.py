@@ -214,6 +214,8 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             cmd = args.command
 
             cmd.setDialogInitialSize(600, 400)
+            # http://help.autodesk.com/view/fusion360/ENU/?guid=GUID-C1BF7FBF-6D35-4490-984B-11EB26232EAD
+            cmd.isExecutedWhenPreEmpted = False
 
             onExecute = ExporterCommandExecuteHandler()
             cmd.execute.add(onExecute)
