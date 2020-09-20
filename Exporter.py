@@ -183,7 +183,7 @@ def visit_file(ctx: Ctx, file) -> Counter:
 def visit_folder(ctx: Ctx, folder) -> Counter:
     log(f'Visiting folder {folder.name}')
 
-    new_ctx = ctx._replace(folder=ctx.folder / folder.name)
+    new_ctx = ctx._replace(folder=ctx.folder / sanitize_filename(folder.name))
     new_ctx.folder.mkdir(exist_ok=True, parents=True)
 
     counter = Counter()
