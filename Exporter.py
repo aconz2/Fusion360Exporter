@@ -95,15 +95,14 @@ def unhide_all_in_component(component):
     component.isBodiesFolderLightBulbOn = True
     component.isSketchFolderLightBulbOn = True
 
-    for i in range(component.bRepBodies.count):
-        component.bRepBodies.item(i).isLightBulbOn = True
+    for brep in component.bRepBodies:
+        brep.isLightBulbOn = True
 
-    for i in range(component.meshBodies.count):
-        component.meshBodies.item(i).isLightBulbOn = True
+    for body in component.meshBodies:
+        body.isLightBulbOn = True
 
     # I find the name occurrences very confusing, but apparently that is what a sub-component is called
-    for i in range(component.occurrences.count):
-        occurrence = component.occurrences.item(i)
+    for occurrence in component.occurrences:
         occurrence.isLightBulbOn = True
         unhide_all_in_component(occurrence.component)
 
@@ -250,12 +249,7 @@ class ExporterCommandDestroyHandler(adsk.core.CommandEventHandler):
 
 # Dont use yield and don't copy list items, swig wants to delete things
 def selected(inputs):
-    ret = []
-    for i in range(inputs.count):
-        it = inputs.item(i)
-        if it.isSelected:
-            ret.append(it.name)
-    return ret
+    return [it.name for it in inputs if it.isSelected]
 
 class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
