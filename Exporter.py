@@ -167,16 +167,10 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
         log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
         return Counter(skipped=1)
 
-    counter = Counter()
-    if ctx.save_sketches:
-        doc.open()
-        counter += export_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc.rootComponent)
-
     output_path = export_filename(ctx, format, file)
     if output_path.exists():
         log(f'{output_path} already exists, skipping')
-        counter.skipped += 1
-        return counter
+        return Counter(skipped=1)
 
     doc.open()
 
@@ -204,9 +198,8 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
     output_path.parent.mkdir(exist_ok=True, parents=True)
     em.execute(options)
     log(f'Saved {output_path}')
-    counter.saved += 1
     
-    return counter
+    return Counter(saved=1)
 
 def visit_file(ctx: Ctx, file) -> Counter:
     log(f'Visiting file {file.name} v{file.versionNumber} . {file.fileExtension}')
@@ -214,6 +207,10 @@ def visit_file(ctx: Ctx, file) -> Counter:
 
     counter = Counter()
 
+    if ctx.save_sketches:
+        doc.open()
+        counter += export_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc.rootComponent)
+        
     for format in ctx.formats:
         try:
             counter += export_file(ctx, format, file, doc)
