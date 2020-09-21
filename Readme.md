@@ -21,10 +21,13 @@ This is a Fusion 360 Script to bulk export your files. Currently will export `f3
 2) File types: Select the export file types you want for each file
 3) Projects: Select the projects you want to work on
 4) Unhide All: When checked, it will unhide all components and all bodies (recursively) so that the exported files contain all bodies
+5) Export Sketches as DXF: Each sketch will get exported as dxf
 
 # Operation
 
 For each document in each selected project, it will ensure that there is a file named `<export directory>/<project name>/<document name>_<version name>.<file extension>`. If that file does not exist, it will open the document and do an export of it, then close it. If there are multiple formats to export, it will only open the document once.
+
+For sketches, it will create a folder hiearchy like `<export directory>/<project name>/<component names ...>/<sketch name>.dxf`.
 
 Since document names might have invalid filename characters, we attempt to replace them with spaces. In order to avoid a false collision, if any chars are replaced, the document name will have 8 hexchars of sha256 hash of the original utf-8 encoded document name. Eg `model 1/2 \ * ? <morechars> ||` would be saved as `model 1 2        morechars    _29a6fecc_v1.f3d`
 
