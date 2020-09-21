@@ -15,6 +15,7 @@ handlers = []
 
 def log(*args):
     print(*args, file=log_fh)
+    log_fh.flush()
 
 def init_directory(name):
     directory = Path(name)
@@ -44,6 +45,10 @@ class Ctx(NamedTuple):
     app: adsk.core.Application
     projects: Set[str]
     unhide_all: bool
+    save_sketches: bool
+
+    def extend(self, other):
+        return self._replace(folder=self.folder / other)
 
 class LazyDocument:
     def __init__(self, ctx, file):
@@ -66,6 +71,14 @@ class LazyDocument:
             return
         log(f'Closing {self._file.name}')
         self._document.close(False)  # don't save changes
+
+    @property
+    def design(self):
+        return design_from_document(self._document)
+    
+    @property
+    def rootComponent(self):
+        return self.design.rootComponent
 
 @dataclass
 class Counter:
@@ -115,7 +128,7 @@ def sanitize_filename(name: str) -> str:
     # this list of characters is just from trying to rename a file in Explorer (on Windows)
     # I think the actual requirements are per fileystem and will be different on Mac
     # I'm not sure how other unicode chars are handled
-    with_replacement = re.sub(r'[\\/*?<>|]', ' ', name)
+    with_replacement = re.sub(r'[:\\/*?<>|]', ' ', name)
     if name == with_replacement:
         return name
     log(f'filename `{name}` contained bad chars, replacing by `{with_replacement}`')
@@ -127,21 +140,49 @@ def export_filename(ctx: Ctx, format: Format, file):
     name = f'{sanitized}_v{file.versionNumber}.{format.value}'
     return ctx.folder / name
 
+def export_sketches(ctx, component):
+    counter = Counter()
+    for sketch in component.sketches:
+        output_path = ctx.folder / f'{sanitize_filename(sketch.name)}.dxf'
+        if output_path.exists():
+            log(f'{output_path} already exists, skipping')
+            counter.skipped += 1
+        else:
+            log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
+            try:
+                output_path.parent.mkdir(exist_ok=True, parents=True)
+                sketch.saveAsDXF(str(output_path))
+                counter.saved += 1
+            except Exception:
+                log(traceback.format_exc())
+                counter.errored += 1
+
+    for occurrence in component.occurrences:
+        counter += export_sketches(ctx.extend(sanitize_filename(occurrence.name)), occurrence.component)
+    
+    return counter
+
 def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
     if file.fileExtension != 'f3d':
         log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
         return Counter(skipped=1)
 
+    counter = Counter()
+    if ctx.save_sketches:
+        doc.open()
+        counter += export_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc.rootComponent)
+
     output_path = export_filename(ctx, format, file)
     if output_path.exists():
         log(f'{output_path} already exists, skipping')
-        return Counter(skipped=1)
+        counter.skipped += 1
+        return counter
 
     doc.open()
 
     # I'm just taking this from here https://github.com/tapnair/apper/blob/master/apper/Fusion360Utilities.py
     # is there a nicer way to do this??
-    design = design_from_document(doc._document)
+    design = doc.design
     em = design.exportManager
     
     # leaving this ugly, not sure what else there might be to handle per format
@@ -160,9 +201,12 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
     else:
         raise Exception(f'Got unknown export format {format}')
 
+    output_path.parent.mkdir(exist_ok=True, parents=True)
     em.execute(options)
     log(f'Saved {output_path}')
-    return Counter(saved=1)
+    counter.saved += 1
+    
+    return counter
 
 def visit_file(ctx: Ctx, file) -> Counter:
     log(f'Visiting file {file.name} v{file.versionNumber} . {file.fileExtension}')
@@ -183,8 +227,7 @@ def visit_file(ctx: Ctx, file) -> Counter:
 def visit_folder(ctx: Ctx, folder) -> Counter:
     log(f'Visiting folder {folder.name}')
 
-    new_ctx = ctx._replace(folder=ctx.folder / sanitize_filename(folder.name))
-    new_ctx.folder.mkdir(exist_ok=True, parents=True)
+    new_ctx = ctx.extend(sanitize_filename(folder.name))
 
     counter = Counter()
 
@@ -228,17 +271,16 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
 
             inputs.addStringValueInput('directory', 'Directory', str(Path.home() / 'Desktop/Fusion360Export'))
             
-            li = inputs.addDropDownCommandInput('file_types', 'Export Types', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
-            li = li.listItems
+            drop = inputs.addDropDownCommandInput('file_types', 'Export Types', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
             for format in Format:
-                li.add(format.value, format in DEFAULT_SELECTED_FORMATS)
+                drop.listItems.add(format.value, format in DEFAULT_SELECTED_FORMATS)
 
-            li = inputs.addDropDownCommandInput('projects', 'Export Projects', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
-            li = li.listItems
+            drop = inputs.addDropDownCommandInput('projects', 'Export Projects', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
             for project in adsk.core.Application.get().data.dataProjects:
-                li.add(project.name, True)
+                drop.listItems.add(project.name, True)
 
             inputs.addBoolValueInput('unhide_all', 'Unhide All Bodies', True, '', True)
+            inputs.addBoolValueInput('save_sketches', 'Save Sketches as DXF', True, '', False)
         except:
             adsk.core.Application.get().userInterface.messageBox(traceback.format_exc())
 
@@ -267,6 +309,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 formats = [FormatFromName[x] for x in selected(inputs.itemById('file_types').listItems)],
                 projects = set(selected(inputs.itemById('projects').listItems)),
                 unhide_all = inputs.itemById('unhide_all').value,
+                save_sketches = inputs.itemById('save_sketches').value,
             )
 
             try:
