@@ -41,3 +41,7 @@ It will create a log file at `<export_directory>/<timestamp>.txt` that should ha
 2) Only visible bodies are included in exports to all file formats except `f3d`. Use the "Unhide All" option to unhide them before exporting
 3) Image renders might cause an error. See [#4](https://github.com/aconz2/Fusion360Exporter/issues/4)
 4) Cloud solves might cause an error. See [#3](https://github.com/aconz2/Fusion360Exporter/issues/3)
+
+# TODO (Maybe)
+
+1) Saving electronics documents? these are `fbrd` files
