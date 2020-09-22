@@ -163,10 +163,6 @@ def export_sketches(ctx, component):
     return counter
 
 def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
-    if file.fileExtension != 'f3d':
-        log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
-        return Counter(skipped=1)
-
     output_path = export_filename(ctx, format, file)
     if output_path.exists():
         log(f'{output_path} already exists, skipping')
@@ -204,6 +200,11 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
 
 def visit_file(ctx: Ctx, file) -> Counter:
     log(f'Visiting file {file.name} v{file.versionNumber} . {file.fileExtension}')
+
+    if file.fileExtension != 'f3d':
+        log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
+        return Counter(skipped=1)
+
     doc = LazyDocument(ctx, file)
 
     counter = Counter()
@@ -230,8 +231,12 @@ def visit_folder(ctx: Ctx, folder) -> Counter:
     counter = Counter()
 
     for file in folder.dataFiles:
-        counter += visit_file(new_ctx, file)
-    
+        try:
+            counter += visit_file(new_ctx, file)
+        except Exception:
+            log(f'Got exception visiting file\n{traceback.format_exc()}')
+            counter.errored += 1
+
     for sub_folder in folder.dataFolders:
         counter += visit_folder(new_ctx, sub_folder)
     
@@ -310,11 +315,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 save_sketches = inputs.itemById('save_sketches').value,
             )
 
-            try:
-                counter = main(ctx)
-            finally:
-                if log_fh is not None:
-                    log_fh.close()
+            counter = main(ctx)
 
             ui.messageBox('\n'.join((
                 f'Saved {counter.saved} files',
@@ -324,7 +325,13 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
             )))
 
         except:
-            adsk.core.Application.get().userInterface.messageBox(f'Log file is at {log_file}\n' + traceback.format_exc())
+            tb = traceback.format_exc()
+            adsk.core.Application.get().userInterface.messageBox(f'Log file is at {log_file}\n{tb}')
+            if log_fh is not None:
+                log(f'Got top level exception\n{tb}')    
+        finally:
+            if log_fh is not None:
+                log_fh.close()
 
 def run(context):
     ui = None
