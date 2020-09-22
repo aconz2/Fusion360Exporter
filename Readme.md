@@ -1,4 +1,4 @@
-This is a Fusion 360 Script to bulk export your files. Currently will export `f3d` files to `f3d`, `igs`, `stp`, `smt`, `sat` and `stl`.
+This is a Fusion 360 Script to bulk export your files. Currently will export `f3d` files to `f3d`, `igs`, `stp`, `smt`, `sat` and `stl`. Can export drawings to `dxf`.
 
 # Installation
 
@@ -17,7 +17,7 @@ This is a Fusion 360 Script to bulk export your files. Currently will export `f3
 
 # Options
 
-1) Directory: This defaults to a folder called Fusion360Exports on your desktop. Sorry about the teeny tiny text input size for this; I can't figure out how to resize it
+1) Directory: This defaults to a folder called Fusion360Exports on your desktop
 2) File types: Select the export file types you want for each file
 3) Projects: Select the projects you want to work on
 4) Unhide All: When checked, it will unhide all components and all bodies (recursively) so that the exported files contain all bodies
@@ -35,8 +35,9 @@ In some ways this is an export and in others, it is more of a sync, since it won
 
 It will create a log file at `<export_directory>/<timestamp>.txt` that should have some more info if things go wrong.
 
-# Limitations
+# Limitations + Known Issues
 
-1) Not tested with drawings. I couldn't find anyting about exporting to DXF in the API docs
-2) Not sure what other file types are out there (simulation data maybe? etc) but it only handles `.f3d` documents
-3) Only visible bodies are included in exports to all file formats except `f3d`. Use the "Unhide All" option to unhide them before exporting
+1) Not sure what other file types are out there (simulation data maybe? etc) but it only handles `.f3d` documents
+2) Only visible bodies are included in exports to all file formats except `f3d`. Use the "Unhide All" option to unhide them before exporting
+3) Image renders might cause an error. See [#4](https://github.com/aconz2/Fusion360Exporter/issues/4)
+4) Cloud solves might cause an error. See [#3](https://github.com/aconz2/Fusion360Exporter/issues/3)
