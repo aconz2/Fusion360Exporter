@@ -178,6 +178,8 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
     # is there a nicer way to do this??
     design = doc.design
     em = design.exportManager
+
+    output_path.parent.mkdir(exist_ok=True, parents=True)
     
     # leaving this ugly, not sure what else there might be to handle per format
     if format == Format.F3D:
@@ -195,7 +197,6 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
     else:
         raise Exception(f'Got unknown export format {format}')
 
-    output_path.parent.mkdir(exist_ok=True, parents=True)
     em.execute(options)
     log(f'Saved {output_path}')
     
