@@ -20,10 +20,10 @@ This is a Fusion 360 Script to bulk export your files. Currently will export `f3
 1) Directory: This defaults to a folder called Fusion360Exports on your desktop
 2) File types: Select the export file types you want for each file
 3) Projects: Select the projects (or folders) you want to operate on
-    * Show Project Folders: Instead of selecting whole projects, you can select specific folders. See [Projects/Folders](#Projects/Folders)
+    * Show Project Folders: Instead of selecting whole projects, you can select specific folders. See [Projects/Folders](#ProjectsFolders)
 4) Unhide All: When checked, it will unhide all components and all bodies (recursively) so that the exported files contain all bodies
 5) Export Sketches as DXF: Each sketch will get exported as dxf
-6) Versions: See [Versions](#Versions)
+6) Versions: Control how many versions are exported. See [Versions](#Versions)
 
 # Projects/Folders
 
