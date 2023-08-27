@@ -2,16 +2,23 @@ import adsk.core
 import traceback
 from pathlib import Path
 from datetime import datetime
-from typing import NamedTuple, List, Set
+from typing import NamedTuple, List, Set, Dict
 from enum import Enum
 from dataclasses import dataclass
 import hashlib
 import re
+from collections import defaultdict
+import itertools
+import json
 
 log_file = None
 log_fh = None
 
 handlers = []
+# map from presentation of `project/folder` shown in UI to (project id, folder id)
+# and also from `project` to (project id, None) if subfolders not enabled
+# this is kinda hacky but not sure how reliable keying on the list item itself is
+project_folders_d = {} # {f'{project.name}/{folder.name}': (project.id, folder.id)}
 
 def log(*args):
     print(*args, file=log_fh)
@@ -34,6 +41,7 @@ class Format(Enum):
     IGES = 'igs'
     SAT = 'sat'
     SMT = 'smt'
+    TMF = '3mf'
 
 FormatFromName = {x.value: x for x in Format}
 
@@ -43,12 +51,18 @@ class Ctx(NamedTuple):
     folder: Path
     formats: List[Format]
     app: adsk.core.Application
-    projects: Set[str]
+    projects_folders: Dict[str, Set[str]] # {projectId: [folderId+]} empty list is taken to mean "no filter"
     unhide_all: bool
     save_sketches: bool
+    num_versions: int # -1 means all versions
 
     def extend(self, other):
         return self._replace(folder=self.folder / other)
+
+    def dumps(self, indent=None):
+        d = self._asdict()
+        d.pop('app')
+        return json.dumps(d, indent=indent, default=str)
 
 class LazyDocument:
     def __init__(self, ctx, file):
@@ -75,7 +89,7 @@ class LazyDocument:
     @property
     def design(self):
         return design_from_document(self._document)
-    
+
     @property
     def rootComponent(self):
         return self.design.rootComponent
@@ -159,7 +173,7 @@ def export_sketches(ctx, component):
 
     for occurrence in component.occurrences:
         counter += export_sketches(ctx.extend(sanitize_filename(occurrence.name)), occurrence.component)
-    
+
     return counter
 
 def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
@@ -176,26 +190,29 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
     em = design.exportManager
 
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    
-    # leaving this ugly, not sure what else there might be to handle per format
+    output_path_s = str(output_path)
+
     if format == Format.F3D:
-        options = em.createFusionArchiveExportOptions(str(output_path))
+        options = em.createFusionArchiveExportOptions(output_path_s)
     elif format == Format.STL:
-        options = em.createSTLExportOptions(design.rootComponent, str(output_path))
+        options = em.createSTLExportOptions(design.rootComponent, output_path_s)
+    elif format == Format.TMF:
+        options = em.createC3MFExportOptions(design.rootComponent, output_path_s)
     elif format == Format.STEP:
-        options = em.createSTEPExportOptions(str(output_path))
+        options = em.createSTEPExportOptions(output_path_s)
     elif format == Format.IGES:
-        options = em.createIGESExportOptions(str(output_path))
+        options = em.createIGESExportOptions(output_path_s)
     elif format == Format.SAT:
-        options = em.createSATExportOptions(str(output_path))
+        options = em.createSATExportOptions(output_path_s)
     elif format == Format.SMT:
-        options = em.createSMTExportOptions(str(output_path))
+        options = em.createSMTExportOptions(output_path_s)
+
     else:
         raise Exception(f'Got unknown export format {format}')
 
     em.execute(options)
     log(f'Saved {output_path}')
-    
+
     return Counter(saved=1)
 
 def visit_file(ctx: Ctx, file) -> Counter:
@@ -212,18 +229,34 @@ def visit_file(ctx: Ctx, file) -> Counter:
     if ctx.save_sketches:
         doc.open()
         counter += export_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc.rootComponent)
-        
+
     for format in ctx.formats:
         try:
             counter += export_file(ctx, format, file, doc)
         except Exception:
             counter.errored += 1
             log(traceback.format_exc())
-    
+
     doc.close()
     return counter
 
-def visit_folder(ctx: Ctx, folder) -> Counter:
+def file_versions(file, num_versions):
+    # file.versions starts with the current/latest version
+    # I'm paranoid the versions won't always be contiguous so we check
+    if num_versions == -1:
+        versions = list(file.versions)[1:]
+    else:
+        versions = list(file.versions)[1:num_versions+1]
+
+    yield file
+    prev = file.versionNumber
+    for v in versions:
+        if prev - v.versionNumber != 1:
+            raise Exception(f'Versions not contiguous! prev={prev} cur={v.versionNumber}')
+        yield v
+        prev = v.versionNumber
+
+def visit_folder(ctx: Ctx, folder, recurse=True) -> Counter:
     log(f'Visiting folder {folder.name}')
 
     new_ctx = ctx.extend(sanitize_filename(folder.name))
@@ -232,71 +265,133 @@ def visit_folder(ctx: Ctx, folder) -> Counter:
 
     for file in folder.dataFiles:
         try:
-            counter += visit_file(new_ctx, file)
+            for file_version in file_versions(file, ctx.num_versions):
+                counter += visit_file(new_ctx, file_version)
         except Exception:
             log(f'Got exception visiting file\n{traceback.format_exc()}')
             counter.errored += 1
 
-    for sub_folder in folder.dataFolders:
-        counter += visit_folder(new_ctx, sub_folder)
-    
+    if recurse:
+        for sub_folder in folder.dataFolders:
+            counter += visit_folder(new_ctx, sub_folder)
+
     return counter
 
 def main(ctx: Ctx) -> Counter:
     init_directory(ctx.folder)
     init_logging(ctx.folder)
 
+    log(ctx.dumps(indent=2))
+
     counter = Counter()
 
-    for project in ctx.app.data.dataProjects:
-        if project.name in ctx.projects:
+    for project_id, folder_ids in ctx.projects_folders.items():
+        project = ctx.app.data.dataProjects.itemById(project_id)
+
+        if folder_ids == []:  # empty filter visit everything
             counter += visit_folder(ctx, project.rootFolder)
 
+        # if the root folder is the only thing selected, we take that to mean no recurse
+        elif folder_ids == [project.rootFolder.id]:
+            counter += visit_folder(ctx, project.rootFolder, recurse=False)
+
+        else:
+            folders = project.rootFolder.dataFolders
+            # hmm this doesn't work, the itemsById doesn't return the folder
+            # for folder_id in folder_ids:
+            #     counter += visit_folder(ctx, folders.itemById(folder_id))
+            for folder in filter(lambda x: x.id in folder_ids, folders):
+                counter += visit_folder(ctx, folder)
+
     return counter
+
+def message_box_traceback():
+    adsk.core.Application.get().userInterface.messageBox(traceback.format_exc())
+
+def populate_data_projects_list(dropdown, show_folders: bool):
+    app = adsk.core.Application.get()
+    dropdown.listItems.clear()
+
+    if show_folders:
+        for project in app.data.dataProjects:
+            for folder in itertools.chain([project.rootFolder], project.rootFolder.dataFolders):
+                name = f'{project.name}/{folder.name}'
+                project_folders_d[name] = (project.id, folder.id)
+                dropdown.listItems.add(name, False)
+    else:
+        for project in app.data.dataProjects:
+            project_folders_d[project.name] = (project.id, None)
+            dropdown.listItems.add(project.name, False)
+
+class ExporterCommandInputChangedHandler(adsk.core.InputChangedEventHandler):
+    def notify(self, args):
+         try:
+            inputs = args.inputs
+            if args.input.id == 'all_versions':
+                inputs.itemById('version_count').isEnabled = not args.input.value
+            elif args.input.id == 'show_folders':
+                populate_data_projects_list(inputs.itemById('projects'), args.input.value)
+
+         except:
+            message_box_traceback()
 
 class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
     def notify(self, args):
         try:
             cmd = args.command
 
-            cmd.setDialogInitialSize(600, 400)
             # http://help.autodesk.com/view/fusion360/ENU/?guid=GUID-C1BF7FBF-6D35-4490-984B-11EB26232EAD
             cmd.isExecutedWhenPreEmpted = False
 
             onExecute = ExporterCommandExecuteHandler()
-            cmd.execute.add(onExecute)
             onDestroy = ExporterCommandDestroyHandler()
+            onInputChanged = ExporterCommandInputChangedHandler()
+            cmd.execute.add(onExecute)
             cmd.destroy.add(onDestroy)
-            handlers.append(onExecute)
-            handlers.append(onDestroy)
+            cmd.inputChanged.add(onInputChanged)
+            handlers.extend([onExecute, onDestroy, onInputChanged])
 
             inputs = cmd.commandInputs
 
             inputs.addStringValueInput('directory', 'Directory', str(Path.home() / 'Desktop/Fusion360Export'))
-            
+
             drop = inputs.addDropDownCommandInput('file_types', 'Export Types', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
             for format in Format:
                 drop.listItems.add(format.value, format in DEFAULT_SELECTED_FORMATS)
 
+            #T addBoolValueInput(id, name, checkbox?, icon, default)
+            inputs.addBoolValueInput('show_folders', 'Show Project Folders', True, '', False)
             drop = inputs.addDropDownCommandInput('projects', 'Export Projects', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
-            for project in adsk.core.Application.get().data.dataProjects:
-                drop.listItems.add(project.name, True)
 
             inputs.addBoolValueInput('unhide_all', 'Unhide All Bodies', True, '', True)
+            versions_group = inputs.addGroupCommandInput('group_versions', 'Versions')
+            versions_group.children.addIntegerSpinnerCommandInput('version_count', 'Number of Previous Versions', 0, 2**16-1, 1, 0)
+            versions_group.children.addBoolValueInput('all_versions', 'Save ALL Versions', True, '', False)
             inputs.addBoolValueInput('save_sketches', 'Save Sketches as DXF', True, '', False)
         except:
-            adsk.core.Application.get().userInterface.messageBox(traceback.format_exc())
+            message_box_traceback()
 
 class ExporterCommandDestroyHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
         try:
             adsk.terminate()
         except:
-            adsk.core.Application.get().userInterface.messageBox(traceback.format_exc())
+            message_box_traceback()
 
 # Dont use yield and don't copy list items, swig wants to delete things
 def selected(inputs):
     return [it.name for it in inputs if it.isSelected]
+
+def make_projects_folders(inputs):
+    ret = defaultdict(set)
+    for it in inputs.itemById('projects').listItems:
+        if it.isSelected:
+            project_id, folder_id = project_folders_d[it.name]
+            if folder_id is None:  # whole project was selected
+                ret[project_id] = []
+            else:
+                ret[project_id].add(folder_id)
+    return ret
 
 class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
@@ -310,9 +405,10 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 app = app,
                 folder = Path(inputs.itemById('directory').value),
                 formats = [FormatFromName[x] for x in selected(inputs.itemById('file_types').listItems)],
-                projects = set(selected(inputs.itemById('projects').listItems)),
+                projects_folders = make_projects_folders(inputs),
                 unhide_all = inputs.itemById('unhide_all').value,
                 save_sketches = inputs.itemById('save_sketches').value,
+                num_versions = -1 if inputs.itemById('all_versions').value else inputs.itemById('version_count').value,
             )
 
             counter = main(ctx)
@@ -328,7 +424,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
             tb = traceback.format_exc()
             adsk.core.Application.get().userInterface.messageBox(f'Log file is at {log_file}\n{tb}')
             if log_fh is not None:
-                log(f'Got top level exception\n{tb}')    
+                log(f'Got top level exception\n{tb}')
         finally:
             if log_fh is not None:
                 log_fh.close()
@@ -339,7 +435,7 @@ def run(context):
         app = adsk.core.Application.get()
         ui = app.userInterface
         cmd_defs = ui.commandDefinitions
-        
+
         CMD_DEF_ID = 'aconz2_Exporter'
         cmd_def = cmd_defs.itemById(CMD_DEF_ID)
         # This isn't how all the other demo scripts manage the lifecycle, but if we don't delete the old
@@ -348,11 +444,11 @@ def run(context):
             cmd_def.deleteMe()
 
         cmd_def = cmd_defs.addButtonDefinition(
-            CMD_DEF_ID, 
-            'Export all the things', 
+            CMD_DEF_ID,
+            'Export all the things',
             'Tooltip',
         )
-        
+
         cmd_created = ExporterCommandCreatedEventHandler()
         cmd_def.commandCreated.add(cmd_created)
         handlers.append(cmd_created)
