@@ -322,7 +322,7 @@ def main(ctx: Ctx) -> Counter:
 def message_box_traceback():
     adsk.core.Application.get().userInterface.messageBox(traceback.format_exc())
 
-def populate_data_projects_list(dropdown, show_folders: bool):
+def populate_data_projects_list(dropdown, show_folders=False):
     app = adsk.core.Application.get()
     dropdown.listItems.clear()
 
@@ -376,6 +376,7 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             #T addBoolValueInput(id, name, checkbox?, icon, default)
             inputs.addBoolValueInput('show_folders', 'Show Project Folders', True, '', False)
             drop = inputs.addDropDownCommandInput('projects', 'Export Projects', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
+            populate_data_projects_list(drop)
 
             inputs.addBoolValueInput('unhide_all', 'Unhide All Bodies', True, '', True)
             versions_group = inputs.addGroupCommandInput('group_versions', 'Versions')
