@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion360",
+    "type": "script",
+    "author": "You",
+    "description": {
+        "": "Export files from certain projects"
+    },
+    "version": "42",
+    "supportedOS": "windows|mac"
+}

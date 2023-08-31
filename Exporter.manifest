@@ -1,11 +1,11 @@
 {
     "autodeskProduct": "Fusion360",
-    "type": "addin",
+    "type": "script",
     "id": "82cad43c-c9d3-4710-9ddc-4fd676ee36c1",
     "author": "Andrew Consroe",
     "description": {
         "": "Export files from projects"
     },
-    "version": "20230827.1",
+    "version": "20230831.1",
     "supportedOS": "windows|mac"
 }

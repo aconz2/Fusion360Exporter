@@ -48,10 +48,10 @@ FormatFromName = {x.value: x for x in Format}
 DEFAULT_SELECTED_FORMATS = {Format.F3D, Format.STEP}
 
 class Ctx(NamedTuple):
+    app: adsk.core.Application
     folder: Path
     formats: List[Format]
-    app: adsk.core.Application
-    projects_folders: Dict[str, Set[str]] # {projectId: [folderId+]} empty list is taken to mean "no filter"
+    projects_folders: Dict[str, List[str]] # {projectId: [folderId+]} empty list is taken to mean "no filter"
     unhide_all: bool
     save_sketches: bool
     num_versions: int # -1 means all versions
@@ -59,10 +59,24 @@ class Ctx(NamedTuple):
     def extend(self, other):
         return self._replace(folder=self.folder / other)
 
-    def dumps(self, indent=None):
+    def to_dict(self):
         d = self._asdict()
         d.pop('app')
-        return json.dumps(d, indent=indent, default=str)
+        d['folder'] = str(d['folder'])
+        d['formats'] = [x.value for x in d['formats']]
+        d['projects_folders'] = {k: list(v) for k, v in d['projects_folders'].items()}
+        return d
+
+    def dumps(self):
+        return json.dumps(self.to_dict(), indent=2)
+
+    @classmethod
+    def from_dict(cls, d, app):
+        d['app'] = app
+        d['folder'] = Path(d['folder'])
+        d['formats'] = [FormatFromName[x] for x in d['formats']]
+        d['projects_folders'] = {k: set(v) for k, v in d['projects_folders'].items()}
+        return cls(**d)
 
 class LazyDocument:
     def __init__(self, ctx, file):
@@ -281,7 +295,7 @@ def main(ctx: Ctx) -> Counter:
     init_directory(ctx.folder)
     init_logging(ctx.folder)
 
-    log(ctx.dumps(indent=2))
+    log(ctx.dumps())
 
     counter = Counter()
 
@@ -393,14 +407,32 @@ def make_projects_folders(inputs):
                 ret[project_id].add(folder_id)
     return ret
 
+def run_main(ctx):
+    try:
+        app = adsk.core.Application.get()
+        ui = app.userInterface
+        counter = main(ctx)
+        ui.messageBox('\n'.join((
+            f'Saved {counter.saved} files',
+            f'Skipped {counter.skipped} files',
+            f'Encountered {counter.errored} errors',
+            f'Log file is at {log_file}'
+        )))
+
+    except:
+        tb = traceback.format_exc()
+        adsk.core.Application.get().userInterface.messageBox(f'Log file is at {log_file}\n{tb}')
+        if log_fh is not None:
+            log(f'Got top level exception\n{tb}')
+    finally:
+        if log_fh is not None:
+            log_fh.close()
+
 class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
         try:
             inputs = args.command.commandInputs
-
             app = adsk.core.Application.get()
-            ui = app.userInterface
-
             ctx = Ctx(
                 app = app,
                 folder = Path(inputs.itemById('directory').value),
@@ -410,24 +442,9 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 save_sketches = inputs.itemById('save_sketches').value,
                 num_versions = -1 if inputs.itemById('all_versions').value else inputs.itemById('version_count').value,
             )
-
-            counter = main(ctx)
-
-            ui.messageBox('\n'.join((
-                f'Saved {counter.saved} files',
-                f'Skipped {counter.skipped} files',
-                f'Encountered {counter.errored} errors',
-                f'Log file is at {log_file}'
-            )))
-
+            run_main(ctx)
         except:
-            tb = traceback.format_exc()
-            adsk.core.Application.get().userInterface.messageBox(f'Log file is at {log_file}\n{tb}')
-            if log_fh is not None:
-                log(f'Got top level exception\n{tb}')
-        finally:
-            if log_fh is not None:
-                log_fh.close()
+            message_box_traceback()
 
 def run(context):
     ui = None

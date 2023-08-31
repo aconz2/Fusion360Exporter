@@ -56,6 +56,12 @@ It will create a log file at `<export_directory>/<timestamp>.txt` that should ha
 3) Image renders might cause an error. See [#4](https://github.com/aconz2/Fusion360Exporter/issues/4)
 4) Cloud solves might cause an error. See [#3](https://github.com/aconz2/Fusion360Exporter/issues/3)
 
+# Saved Settings
+
+To easily run the same settings repeatedly, you can copy-paste the `Template` folder in `UserScripts` so that you have `UserScripts/YourScriptName/YourScriptName.{py,manifest}`. Then, open up a log file of a run that you want to replicate and copy paste the JSON blob at the beginning into `YourScriptName.py`. Then add this into Fusion as a script and run normally.
+
+Note that we store project and folder id's, so renaming a project/folder will not break your backup script. But if you happen to replace the folder with a new one of the same name, it won't work.
+
 # TODO (Maybe)
 
 1) Saving electronics documents? these are `fbrd` files
