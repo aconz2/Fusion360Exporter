@@ -156,7 +156,7 @@ def sanitize_filename(name: str) -> str:
     # this list of characters is just from trying to rename a file in Explorer (on Windows)
     # I think the actual requirements are per fileystem and will be different on Mac
     # I'm not sure how other unicode chars are handled
-    with_replacement = re.sub(r'[:\\/*?<>|]', ' ', name)
+    with_replacement = re.sub(r'[:\\/*?<>|"]', ' ', name)
     if name == with_replacement:
         return name
     log(f'filename `{name}` contained bad chars, replacing by `{with_replacement}`')

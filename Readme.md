@@ -69,3 +69,4 @@ Note that we store project and folder id's, so renaming a project/folder will no
 # Credit
 
 * Pulled the addition of `3mf` from [tavdog](https://github.com/tavdog/Fusion360Exporter)
+* Problematic `"` in project names reported by TheShanMan
