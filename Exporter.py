@@ -47,6 +47,8 @@ FormatFromName = {x.value: x for x in Format}
 
 DEFAULT_SELECTED_FORMATS = {Format.F3D, Format.STEP}
 
+archive_extensions = ['zip', 'gz', 'tar.gz', 'tar.bz2', 'tar.xz']
+
 class Ctx(NamedTuple):
     app: adsk.core.Application
     folder: Path
@@ -165,7 +167,12 @@ def sanitize_filename(name: str) -> str:
 
 def export_filename(ctx: Ctx, format: Format, file):
     sanitized = sanitize_filename(file.name)
-    name = f'{sanitized}_v{file.versionNumber}.{format.value}'
+    name = f'{sanitized} v{file.versionNumber}.{format.value}'
+    return ctx.folder / name
+
+def export_archive_filename(ctx: Ctx, format: Format, archive_extension, file):
+    sanitized = sanitize_filename(file.name)
+    name = f'{sanitized} v{file.versionNumber}.{format.value}.{archive_extension}'
     return ctx.folder / name
 
 def export_sketches(ctx, component):
@@ -195,6 +202,11 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
     if output_path.exists():
         log(f'{output_path} already exists, skipping')
         return Counter(skipped=1)
+    for archive_extension in archive_extensions:
+        archive_path = export_archive_filename(ctx, format, archive_extension, file)
+        if archive_path.exists():
+            log(f'{output_path} already exists as archive, skipping')
+            return Counter(skipped=1)
 
     doc.open()
 
