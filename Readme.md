@@ -3,10 +3,13 @@ This is a Fusion 360 Script to bulk export your files. Currently will export `f3
 # Installation
 
 1) Download this repo and unzip it somewhere.
-2) In Fusion, goto TOOLS > ADD-INS > Scripts and Add-Ins (or just hit Shift+S)
+2) In Fusion, goto UTILITIES > ADD-INS > Scripts and Add-Ins (or just hit Shift+S)
+   * UTILITIES was previously known as TOOLS
 3) Next to "My Scripts", hit the green plus icon
 4) Select the folder where you unzipped it
 5) "Exporter" should now appear under "My Scripts"
+
+or see the [offical docs](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/How-to-install-an-ADD-IN-and-Script-in-Fusion-360.html) though they recommend copying the folder into the scripts directory and restarting which seems more complicated to me.
 
 # Usage
 
@@ -76,3 +79,4 @@ Note that we store project and folder id's, so renaming a project/folder will no
 
 * Pulled the addition of `3mf` from [tavdog](https://github.com/tavdog/Fusion360Exporter)
 * Problematic `"` in project names reported by TheShanMan
+* Installation doc improvement reported by sqlBender
