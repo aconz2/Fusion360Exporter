@@ -175,7 +175,6 @@ def sanitize_filename(name: str) -> str:
     hash = hashlib.sha256(name.encode()).hexdigest()[:8]
     return f'{with_replacement}_{hash}'
 
-
 def set_mtime(path: Path, time: int):
     """utime wants to set atime and mtime, we just set it the same"""
     os.utime(path, (time, time))
