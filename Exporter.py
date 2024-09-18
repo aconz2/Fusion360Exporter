@@ -11,7 +11,6 @@ from collections import defaultdict
 import itertools
 import json
 import os
-import urllib.parse
 
 # If you have a bunch of files already existing and really want the files' date-modified attr
 # to be correct but don't want to rerun an export, you can change this to True for a single run, then
@@ -169,17 +168,13 @@ def sanitize_filename(name: str) -> str:
     # this list of characters is just from trying to rename a file in Explorer (on Windows)
     # I think the actual requirements are per fileystem and will be different on Mac
     # I'm not sure how other unicode chars are handled
-    try:
-        with_replacement = re.sub(r'[:\\/*?<>|"]', ' ', name)
-        if name == with_replacement:
-            return name
-        log(f'filename `{name}` contained bad chars, replacing by `{with_replacement}`')
-        hash = hashlib.sha256(name.encode()).hexdigest()[:8]
-        return f'{with_replacement}_{hash}'
-    except UnicodeEncodeError:
-        encoded_name = urllib.parse.quote(name.encode())
-        log(f'filename `{name}` cannot be handled, trying with url encoding `{encoded_name}`')
-        return encoded_name
+    with_replacement = re.sub(r'[:\\/*?<>|"]', ' ', name)
+    if name == with_replacement:
+        return name
+    log(f'filename `{name}` contained bad chars, replacing by `{with_replacement}`')
+    hash = hashlib.sha256(name.encode()).hexdigest()[:8]
+    return f'{with_replacement}_{hash}'
+
 
 def set_mtime(path: Path, time: int):
     """utime wants to set atime and mtime, we just set it the same"""
