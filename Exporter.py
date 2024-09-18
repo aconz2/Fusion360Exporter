@@ -38,7 +38,7 @@ def init_directory(name):
 def init_logging(directory):
     global log_file, log_fh
     log_file = directory / '{:%Y_%m_%d_%H_%M}.txt'.format(datetime.now())
-    log_fh = open(log_file, 'w')
+    log_fh = open(log_file, 'w', encoding="utf-8")
 
 class Format(Enum):
     F3D = 'f3d'
