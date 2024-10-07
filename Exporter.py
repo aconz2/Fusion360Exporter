@@ -280,12 +280,23 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
         return counter
 
 def file_versions(file: adsk.core.DataFile, num_versions):
-    # file.versions starts with the current/latest version
-    # I'm paranoid the versions won't always be contiguous so we check
+    # file.versions (should) start with the current/latest version
+    # we discovered that file.versions is actually sorted by the string of the versionNumber
+    # so for something with 11 versions, we get [9, 8, 7, 6, 5, 4, 3, 2, 11, 10, 1]
+    # but versionNumber does appear to always be an int so far, not sure where that error creeps in
+    # so we just have to resort by int
+    # it's possible this is not ideal for very large version counts if the swig layer is actually lazy
+    # and so we force the iterator, but not sure, and idk how to avoid it and still get the versions in the 
+    # right order.
+    versions = sorted(file.versions, key=lambda x: x.versionNumber, reverse=True)
+
+    if versions[0].versionNumber != file.versionNumber:
+        raise Exception(f'Expected versions[0] to be current file version, but got {versions[0].versionNumber}')
+    
     if num_versions == -1:
-        versions = list(file.versions)[1:]
+        versions = versions[1:]
     else:
-        versions = list(file.versions)[1:num_versions+1]
+        versions = versions[1:num_versions+1]
 
     yield file
     prev = file.versionNumber

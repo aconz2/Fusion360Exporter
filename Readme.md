@@ -80,3 +80,4 @@ Note that we store project and folder id's, so renaming a project/folder will no
 * Pulled the addition of `3mf` from [tavdog](https://github.com/tavdog/Fusion360Exporter)
 * Problematic `"` in project names reported by TheShanMan
 * Installation doc improvement reported by sqlBender
+* Version ordering bug reported and diagnosed by loglow
