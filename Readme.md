@@ -3,10 +3,13 @@ This is a Fusion 360 Script to bulk export your files. Currently will export `f3
 # Installation
 
 1) Download this repo and unzip it somewhere.
-2) In Fusion, goto TOOLS > ADD-INS > Scripts and Add-Ins (or just hit Shift+S)
+2) In Fusion, goto UTILITIES > ADD-INS > Scripts and Add-Ins (or just hit Shift+S)
+   * UTILITIES was previously known as TOOLS
 3) Next to "My Scripts", hit the green plus icon
 4) Select the folder where you unzipped it
 5) "Exporter" should now appear under "My Scripts"
+
+or see the [offical docs](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/How-to-install-an-ADD-IN-and-Script-in-Fusion-360.html) though they recommend copying the folder into the scripts directory and restarting which seems more complicated to me.
 
 # Usage
 
@@ -39,7 +42,7 @@ By default, only the latest version of each file will be exported. You can chang
 
 # Operation
 
-For each document in each selected project, it will ensure that there is a file named `<export directory>/<project name>/<document name>_<version name>.<file extension>`. If that file does not exist, it will open the document and do an export of it, then close it. If there are multiple formats to export, it will only open the document once.
+For each document in each selected project, it will ensure that there is a file named `<export directory>/<project name>/<document name>_<version name>.<file extension>`. If that file does not exist, it will open the document and do an export of it, then close it. If there are multiple formats to export, it will only open the document once. The exported file has it's `Date Modified` attribute (or `mtime`) set to the modified date (time) of the document (see File Time section for additional info).
 
 For sketches, it will create a folder hiearchy like `<export directory>/<project name>/<component names ...>/<sketch name>.dxf`.
 
@@ -48,6 +51,12 @@ Since document names might have invalid filename characters, we attempt to repla
 In some ways this is an export and in others, it is more of a sync, since it won't re-export files that already exist and it skips opening documents it doesn't need to (with the caveat being we always have to open every document when exporting sketches).
 
 It will create a log file at `<export_directory>/<timestamp>.txt` that should have some more info if things go wrong.
+
+# File Time
+
+Starting in version `20240813.1`, newly exported files have their `Date Modified` (or `mtime`) attribute set to the document's modified time. If you didn't want this you could replace the `set_mtime` function with a noop (ie just `pass`) or open an issue if you think this should be more configurable. However, by default it will not update the `mtime` for files that already exist which have their `mtime` corresponding to when the file was exported, not when the document was modified. If you wanted to do a one-time synchronize for these times, look at the top of source for the variable `update_existing_file_times`. I'm leaving it off by default to avoid pointlessly setting it on every run. And you would need to run the one-time synchronize with all the file formats and projects and versions etc selected that correspond to all the files you want updated.
+
+Folders' `mtime` are not handled.
 
 # Limitations + Known Issues
 
@@ -70,3 +79,5 @@ Note that we store project and folder id's, so renaming a project/folder will no
 
 * Pulled the addition of `3mf` from [tavdog](https://github.com/tavdog/Fusion360Exporter)
 * Problematic `"` in project names reported by TheShanMan
+* Installation doc improvement reported by sqlBender
+* Version ordering bug reported and diagnosed by loglow

@@ -10,6 +10,12 @@ import re
 from collections import defaultdict
 import itertools
 import json
+import os
+
+# If you have a bunch of files already existing and really want the files' date-modified attr
+# to be correct but don't want to rerun an export, you can change this to True for a single run, then
+# probably change it back so you're not spamming the pointless attr change every time
+update_existing_file_times = False
 
 log_file = None
 log_fh = None
@@ -32,7 +38,7 @@ def init_directory(name):
 def init_logging(directory):
     global log_file, log_fh
     log_file = directory / '{:%Y_%m_%d_%H_%M}.txt'.format(datetime.now())
-    log_fh = open(log_file, 'w')
+    log_fh = open(log_file, 'w', encoding="utf-8")
 
 class Format(Enum):
     F3D = 'f3d'
@@ -81,16 +87,16 @@ class Ctx(NamedTuple):
         return cls(**d)
 
 class LazyDocument:
-    def __init__(self, ctx, file):
+    def __init__(self, ctx: Ctx, file: adsk.core.DataFile):
         self._ctx = ctx
-        self._file = file
         self._document = None
+        self.file = file
 
     def open(self):
         if self._document is not None:
             return
-        log(f'Opening `{self._file.name}`')
-        self._document = self._ctx.app.documents.open(self._file)
+        log(f'Opening `{self.file.name}`')
+        self._document = self._ctx.app.documents.open(self.file)
         self._document.activate()
 
         if self._ctx.unhide_all:
@@ -99,7 +105,7 @@ class LazyDocument:
     def close(self):
         if self._document is None:
             return
-        log(f'Closing {self._file.name}')
+        log(f'Closing {self.file.name}')
         self._document.close(False)  # don't save changes
 
     @property
@@ -109,6 +115,12 @@ class LazyDocument:
     @property
     def rootComponent(self):
         return self.design.rootComponent
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
 @dataclass
 class Counter:
@@ -165,7 +177,41 @@ def sanitize_filename(name: str) -> str:
     hash = hashlib.sha256(name.encode()).hexdigest()[:8]
     return f'{with_replacement}_{hash}'
 
-def export_filename(ctx: Ctx, format: Format, file):
+def set_mtime(path: Path, time: int):
+    """utime wants to set atime and mtime, we just set it the same"""
+    os.utime(path, (time, time))
+
+# component: adsk.core.Component but that doesn't exist for some reason?
+# sketch   : adsk.core.Sketch likewise
+def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
+    output_path = ctx.folder / f'{sanitize_filename(sketch.name)}.dxf'
+    if output_path.exists():
+        if update_existing_file_times:
+            set_mtime(output_path, doc.file.dateModified)
+        log(f'{output_path} already exists, skipping')
+        return Counter(skipped=1)
+    
+    log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    sketch.saveAsDXF(str(output_path))
+    set_mtime(output_path, doc.file.dateModified)
+    return Counter(saved=1)
+
+def visit_sketches(ctx: Ctx, doc: LazyDocument, component):
+    counter = Counter()
+    for sketch in component.sketches:
+        try:
+            counter += export_sketch(ctx, doc, component, sketch)
+        except Exception:
+            log(traceback.format_exc())
+            counter.errored += 1
+
+    for occurrence in component.occurrences:
+        counter += visit_sketches(ctx.extend(sanitize_filename(occurrence.name)), doc, occurrence.component)
+
+    return counter
+
+def export_filename(ctx: Ctx, format: Format, file: adsk.core.DataFile):
     sanitized = sanitize_filename(file.name)
     name = f'{sanitized} v{file.versionNumber}.{format.value}'
     return ctx.folder / name
@@ -175,31 +221,11 @@ def export_archive_filename(ctx: Ctx, format: Format, archive_extension, file):
     name = f'{sanitized} v{file.versionNumber}.{format.value}.{archive_extension}'
     return ctx.folder / name
 
-def export_sketches(ctx, component):
-    counter = Counter()
-    for sketch in component.sketches:
-        output_path = ctx.folder / f'{sanitize_filename(sketch.name)}.dxf'
-        if output_path.exists():
-            log(f'{output_path} already exists, skipping')
-            counter.skipped += 1
-        else:
-            log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
-            try:
-                output_path.parent.mkdir(exist_ok=True, parents=True)
-                sketch.saveAsDXF(str(output_path))
-                counter.saved += 1
-            except Exception:
-                log(traceback.format_exc())
-                counter.errored += 1
-
-    for occurrence in component.occurrences:
-        counter += export_sketches(ctx.extend(sanitize_filename(occurrence.name)), occurrence.component)
-
-    return counter
-
-def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
-    output_path = export_filename(ctx, format, file)
+def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
+    output_path = export_filename(ctx, format, doc.file)
     if output_path.exists():
+        if update_existing_file_times:
+            set_mtime(output_path, doc.file.dateModified)
         log(f'{output_path} already exists, skipping')
         return Counter(skipped=1)
     for archive_extension in archive_extensions:
@@ -237,42 +263,52 @@ def export_file(ctx: Ctx, format: Format, file, doc: LazyDocument) -> Counter:
         raise Exception(f'Got unknown export format {format}')
 
     em.execute(options)
+    set_mtime(output_path, doc.file.dateModified)
     log(f'Saved {output_path}')
 
     return Counter(saved=1)
 
-def visit_file(ctx: Ctx, file) -> Counter:
+def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
     log(f'Visiting file {file.name} v{file.versionNumber} . {file.fileExtension}')
 
     if file.fileExtension != 'f3d':
         log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
         return Counter(skipped=1)
 
-    doc = LazyDocument(ctx, file)
+    with LazyDocument(ctx, file) as doc:
+        counter = Counter()
 
-    counter = Counter()
+        if ctx.save_sketches:
+            doc.open()
+            counter += visit_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc, doc.rootComponent)
 
-    if ctx.save_sketches:
-        doc.open()
-        counter += export_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc.rootComponent)
+        for format in ctx.formats:
+            try:
+                counter += export_file(ctx, format, doc)
+            except Exception:
+                counter.errored += 1
+                log(traceback.format_exc())
 
-    for format in ctx.formats:
-        try:
-            counter += export_file(ctx, format, file, doc)
-        except Exception:
-            counter.errored += 1
-            log(traceback.format_exc())
+        return counter
 
-    doc.close()
-    return counter
+def file_versions(file: adsk.core.DataFile, num_versions):
+    # file.versions (should) start with the current/latest version
+    # we discovered that file.versions is actually sorted by the string of the versionNumber
+    # so for something with 11 versions, we get [9, 8, 7, 6, 5, 4, 3, 2, 11, 10, 1]
+    # but versionNumber does appear to always be an int so far, not sure where that error creeps in
+    # so we just have to resort by int
+    # it's possible this is not ideal for very large version counts if the swig layer is actually lazy
+    # and so we force the iterator, but not sure, and idk how to avoid it and still get the versions in the 
+    # right order.
+    versions = sorted(file.versions, key=lambda x: x.versionNumber, reverse=True)
 
-def file_versions(file, num_versions):
-    # file.versions starts with the current/latest version
-    # I'm paranoid the versions won't always be contiguous so we check
+    if versions[0].versionNumber != file.versionNumber:
+        raise Exception(f'Expected versions[0] to be current file version, but got {versions[0].versionNumber}')
+    
     if num_versions == -1:
-        versions = list(file.versions)[1:]
+        versions = versions[1:]
     else:
-        versions = list(file.versions)[1:num_versions+1]
+        versions = versions[1:num_versions+1]
 
     yield file
     prev = file.versionNumber
