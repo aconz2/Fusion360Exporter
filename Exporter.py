@@ -229,7 +229,7 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
         log(f'{output_path} already exists, skipping')
         return Counter(skipped=1)
     for archive_extension in archive_extensions:
-        archive_path = export_archive_filename(ctx, format, archive_extension, file)
+        archive_path = export_archive_filename(ctx, format, archive_extension, doc.file)
         if archive_path.exists():
             log(f'{output_path} already exists as archive, skipping')
             return Counter(skipped=1)
