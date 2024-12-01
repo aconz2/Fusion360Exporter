@@ -17,6 +17,9 @@ import os
 # probably change it back so you're not spamming the pointless attr change every time
 update_existing_file_times = False
 
+# Older versions of this script used '_' as seperator but Fusion 360 uses ' ' per default in manual exports.
+VERSION_SEPARATOR = '_' # use either ' ' or '_'
+
 log_file = None
 log_fh = None
 
@@ -213,12 +216,12 @@ def visit_sketches(ctx: Ctx, doc: LazyDocument, component):
 
 def export_filename(ctx: Ctx, format: Format, file: adsk.core.DataFile):
     sanitized = sanitize_filename(file.name)
-    name = f'{sanitized} v{file.versionNumber}.{format.value}'
+    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{format.value}'
     return ctx.folder / name
 
 def export_archive_filename(ctx: Ctx, format: Format, archive_extension, file):
     sanitized = sanitize_filename(file.name)
-    name = f'{sanitized} v{file.versionNumber}.{format.value}.{archive_extension}'
+    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{format.value}.{archive_extension}'
     return ctx.folder / name
 
 def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
@@ -269,7 +272,7 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     return Counter(saved=1)
 
 def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
-    log(f'Visiting file {file.name} v{file.versionNumber} . {file.fileExtension}')
+    log(f'Visiting file {file.name}{VERSION_SEPARATOR}v{file.versionNumber} . {file.fileExtension}')
 
     if file.fileExtension != 'f3d':
         log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
