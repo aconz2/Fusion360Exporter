@@ -56,7 +56,7 @@ FormatFromName = {x.value: x for x in Format}
 
 DEFAULT_SELECTED_FORMATS = {Format.F3D, Format.STEP}
 
-archive_extensions = ['zip', 'gz', 'tar.gz', 'tar.bz2', 'tar.xz']
+archive_extensions = ['.zip', '.gz', '.tar.gz', '.tar.bz2', '.tar.xz']
 
 class Ctx(NamedTuple):
     app: adsk.core.Application
@@ -219,11 +219,6 @@ def export_filename(ctx: Ctx, format: Format, file: adsk.core.DataFile):
     name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{format.value}'
     return ctx.folder / name
 
-def export_archive_filename(ctx: Ctx, format: Format, archive_extension, file):
-    sanitized = sanitize_filename(file.name)
-    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{format.value}.{archive_extension}'
-    return ctx.folder / name
-
 def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     output_path = export_filename(ctx, format, doc.file)
     if output_path.exists():
@@ -232,7 +227,7 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
         log(f'{output_path} already exists, skipping')
         return Counter(skipped=1)
     for archive_extension in archive_extensions:
-        archive_path = export_archive_filename(ctx, format, archive_extension, doc.file)
+        archive_path = output_path.with_name(output_path.name + archive_extension)
         if archive_path.exists():
             log(f'{output_path} already exists as archive, skipping')
             return Counter(skipped=1)
