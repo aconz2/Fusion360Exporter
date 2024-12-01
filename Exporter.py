@@ -267,7 +267,7 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     return Counter(saved=1)
 
 def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
-    log(f'Visiting file {file.name}{VERSION_SEPARATOR}v{file.versionNumber} . {file.fileExtension}')
+    log(f'Visiting file {file.name}{VERSION_SEPARATOR}v{file.versionNumber}.{file.fileExtension}')
 
     if file.fileExtension != 'f3d':
         log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
