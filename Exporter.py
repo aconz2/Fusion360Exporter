@@ -56,7 +56,7 @@ FormatFromName = {x.value: x for x in Format}
 
 DEFAULT_SELECTED_FORMATS = {Format.F3D, Format.STEP}
 
-archive_extensions = ['.zip', '.gz', '.tar.gz', '.tar.bz2', '.tar.xz']
+archive_extensions = ['.zip', '.rar', '.gz', '.tar.gz', '.tar.bz2', '.tar.xz']
 
 class Ctx(NamedTuple):
     app: adsk.core.Application
