@@ -18,7 +18,7 @@ import os
 update_existing_file_times = False
 
 # Older versions of this script used '_' as seperator but Fusion 360 uses ' ' per default in manual exports.
-VERSION_SEPARATOR = '_' # use either ' ' or '_'
+VERSION_SEPARATOR = ' ' # use either ' ' or '_'
 
 log_file = None
 log_fh = None
