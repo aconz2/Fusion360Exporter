@@ -184,16 +184,35 @@ def set_mtime(path: Path, time: int):
     """utime wants to set atime and mtime, we just set it the same"""
     os.utime(path, (time, time))
 
+def output_path_exists(path: Path, doc: LazyDocument) -> bool:
+    """
+    Check if the file path already exists with version extension.
+    Also checks for archived versions of the files to export and if update_existing_file_times
+    is set, updates the mtime of existing files (not the archives).
+    """
+    if path.exists():
+        if update_existing_file_times:
+            set_mtime(path, doc.file.dateModified)
+            log(f'{path} already exists, but mtime was corrected')
+        else:
+            log(f'{path} already exists, skipping')
+        return True
+
+    for archive_extension in archive_extensions:
+        archive_path = path.with_name(path.name + archive_extension)
+        if archive_path.exists():
+            log(f'{path} already exists as archive, skipping')
+            return True
+
+    return False
+
 # component: adsk.core.Component but that doesn't exist for some reason?
 # sketch   : adsk.core.Sketch likewise
 def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
     output_path = ctx.folder / f'{sanitize_filename(sketch.name)}.dxf'
-    if output_path.exists():
-        if update_existing_file_times:
-            set_mtime(output_path, doc.file.dateModified)
-        log(f'{output_path} already exists, skipping')
+    if output_path_exists(output_path, doc):
         return Counter(skipped=1)
-    
+
     log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
     output_path.parent.mkdir(exist_ok=True, parents=True)
     sketch.saveAsDXF(str(output_path))
@@ -221,16 +240,8 @@ def export_filename(ctx: Ctx, format: Format, file: adsk.core.DataFile):
 
 def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     output_path = export_filename(ctx, format, doc.file)
-    if output_path.exists():
-        if update_existing_file_times:
-            set_mtime(output_path, doc.file.dateModified)
-        log(f'{output_path} already exists, skipping')
+    if output_path_exists(output_path, doc):
         return Counter(skipped=1)
-    for archive_extension in archive_extensions:
-        archive_path = output_path.with_name(output_path.name + archive_extension)
-        if archive_path.exists():
-            log(f'{output_path} already exists as archive, skipping')
-            return Counter(skipped=1)
 
     doc.open()
 
@@ -267,7 +278,7 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     return Counter(saved=1)
 
 def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
-    log(f'Visiting file {file.name}{VERSION_SEPARATOR}v{file.versionNumber}.{file.fileExtension}')
+    log(f'Visiting file {file.name} v{file.versionNumber}.{file.fileExtension}')
 
     if file.fileExtension != 'f3d':
         log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
