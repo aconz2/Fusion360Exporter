@@ -405,6 +405,7 @@ class I(StrEnum):
     version_count = 'version_count'
     all_versions = 'all_versions'
     save_sketches = 'save_sketches'
+    version_separator_is_space = 'version_separator_is_space'
 
 def populate_data_projects_list(dropdown, show_folders=False, selected=None):
     app = adsk.core.Application.get()
@@ -484,6 +485,9 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             
             save_sketches = last_settings.get(I.save_sketches, False)
             inputs.addBoolValueInput(I.save_sketches, 'Save Sketches as DXF', True, '', save_sketches)
+
+            version_separator_is_space = last_settings.get(I.version_separator_is_space, VERSION_SEPARATOR == ' ')
+            inputs.addBoolValueInput(I.version_separator_is_space, 'Version Separator is Space', True, '', version_separator_is_space)
         except:
             message_box_traceback()
 
@@ -552,7 +556,13 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 I.save_sketches: iv(I.save_sketches),
                 I.version_count: iv(I.version_count),
                 I.all_versions: iv(I.all_versions),
+                I.version_separator_is_space: iv(I.version_separator_is_space),
             })
+
+            # kinda hacky
+            if iv(I.version_separator_is_space):
+                global VERSION_SEPARATOR
+                VERSION_SEPARATOR = ' '
 
             ctx = Ctx(
                 app = adsk.core.Application.get(),

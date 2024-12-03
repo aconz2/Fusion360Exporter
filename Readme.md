@@ -27,6 +27,9 @@ or see the [offical docs](https://www.autodesk.com/support/technical/article/caa
 4) Unhide All: When checked, it will unhide all components and all bodies (recursively) so that the exported files contain all bodies
 5) Export Sketches as DXF: Each sketch will get exported as dxf
 6) Versions: Control how many versions are exported. See [Versions](#Versions)
+7) Version Separator Is Space: Controls which character `_` or ` ` (space) is used between the name and version (ie. `name_v42.stl` or `name v42.stl`). Defaults to the original `_` and checking this will use ` ` (space) to better match Fusion.
+
+The last run's settings are loaded by default (if they exist). They are stored next to the `Exporter.py` file on your file system in a file called `last_settings.json`. In "My Scripts", you can right-click "Exporter" and then "Open file location" to get there. If you rename projects or folders you will have to reselect those projects.
 
 # Projects/Folders
 
@@ -42,7 +45,7 @@ By default, only the latest version of each file will be exported. You can chang
 
 # Operation
 
-For each document in each selected project, it will ensure that there is a file named `<export directory>/<project name>/<document name>_<version name>.<file extension>`. If that file does not exist, it will open the document and do an export of it, then close it. If there are multiple formats to export, it will only open the document once. The exported file has it's `Date Modified` attribute (or `mtime`) set to the modified date (time) of the document (see File Time section for additional info).
+For each document in each selected project, it will check that there is a file named `<export directory>/<project name>/<document name><version separator><version name>.<file extension>` OR that file name with a few compressed/archived suffixes (see the code). If that file does not exist, it will open the document and do an export of it, then close it. If there are multiple formats to export, it will only open the document once. The exported file has it's `Date Modified` attribute (or `mtime`) set to the modified date (time) of the document (see File Time section for additional info).
 
 For sketches, it will create a folder hiearchy like `<export directory>/<project name>/<component names ...>/<sketch name>.dxf`.
 
@@ -71,9 +74,12 @@ To easily run the same settings repeatedly, you can copy-paste the `Template` fo
 
 Note that we store project and folder id's, so renaming a project/folder will not break your backup script. But if you happen to replace the folder with a new one of the same name, it won't work.
 
+You might run into an issue with the `VERSION_SEPARATOR` (whether it is export `file_v42.stl` or `file v42.stl`) if you are using saved settings.
+
 # TODO (Maybe)
 
 1) Saving electronics documents? these are `fbrd` files
+2) Per-component export of `stl` (or other format); currently only the root component is exported with everything in it
 
 # Credit
 
