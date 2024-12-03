@@ -6,6 +6,6 @@
     "description": {
         "": "Export files from projects"
     },
-    "version": "20240813.1",
+    "version": "20241203.1",
     "supportedOS": "windows|mac"
 }
