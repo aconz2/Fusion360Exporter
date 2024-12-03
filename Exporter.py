@@ -3,7 +3,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 from typing import NamedTuple, List, Set, Dict
-from enum import Enum
+from enum import Enum, StrEnum
 from dataclasses import dataclass
 import hashlib
 import re
@@ -11,6 +11,7 @@ from collections import defaultdict
 import itertools
 import json
 import os
+from functools import partial
 
 # If you have a bunch of files already existing and really want the files' date-modified attr
 # to be correct but don't want to rerun an export, you can change this to True for a single run, then
@@ -29,6 +30,8 @@ handlers = []
 # this is kinda hacky but not sure how reliable keying on the list item itself is
 project_folders_d = {} # {f'{project.name}/{folder.name}': (project.id, folder.id)}
 
+last_settings_path = Path(__file__).parent / 'last_settings.json'
+
 def log(*args):
     print(*args, file=log_fh)
     log_fh.flush()
@@ -43,6 +46,16 @@ def init_logging(directory):
     log_file = directory / '{:%Y_%m_%d_%H_%M}.txt'.format(datetime.now())
     log_fh = open(log_file, 'w', encoding="utf-8")
 
+def load_last_settings():
+    if not last_settings_path.exists():
+        return {}
+    with open(last_settings_path) as fh:
+        return json.load(fh)
+
+def save_last_settings(d):
+    with open(last_settings_path, 'w') as fh:
+        json.dump(d, fh, indent=2)
+
 class Format(Enum):
     F3D = 'f3d'
     STEP = 'step'
@@ -54,7 +67,7 @@ class Format(Enum):
 
 FormatFromName = {x.value: x for x in Format}
 
-DEFAULT_SELECTED_FORMATS = {Format.F3D, Format.STEP}
+DEFAULT_SELECTED_FORMATS = {Format.F3D.value, Format.STEP.value}
 
 archive_extensions = ['.zip', '.rar', '.gz', '.tar.gz', '.tar.bz2', '.tar.xz']
 
@@ -88,6 +101,9 @@ class Ctx(NamedTuple):
         d['formats'] = [FormatFromName[x] for x in d['formats']]
         d['projects_folders'] = {k: set(v) for k, v in d['projects_folders'].items()}
         return cls(**d)
+
+    def has_show_folders(self):
+        return any(len(v) > 0 for v in self.projects_folders.values())
 
 class LazyDocument:
     def __init__(self, ctx: Ctx, file: adsk.core.DataFile):
@@ -379,29 +395,43 @@ def main(ctx: Ctx) -> Counter:
 def message_box_traceback():
     adsk.core.Application.get().userInterface.messageBox(traceback.format_exc())
 
-def populate_data_projects_list(dropdown, show_folders=False):
+class I(StrEnum):
+    """UI input ids"""
+    directory = 'directory'
+    file_types = 'file_types'
+    show_folders = 'show_folders'
+    projects = 'projects'
+    unhide_all = 'unhide_all'
+    version_count = 'version_count'
+    all_versions = 'all_versions'
+    save_sketches = 'save_sketches'
+
+def populate_data_projects_list(dropdown, show_folders=False, selected=None):
     app = adsk.core.Application.get()
     dropdown.listItems.clear()
+
+    if selected is None:
+        selected = []
 
     if show_folders:
         for project in app.data.dataProjects:
             for folder in itertools.chain([project.rootFolder], project.rootFolder.dataFolders):
                 name = f'{project.name}/{folder.name}'
                 project_folders_d[name] = (project.id, folder.id)
-                dropdown.listItems.add(name, False)
+                dropdown.listItems.add(name, name in selected)
     else:
         for project in app.data.dataProjects:
             project_folders_d[project.name] = (project.id, None)
-            dropdown.listItems.add(project.name, False)
+            dropdown.listItems.add(project.name, project.name in selected)
 
 class ExporterCommandInputChangedHandler(adsk.core.InputChangedEventHandler):
     def notify(self, args):
          try:
             inputs = args.inputs
-            if args.input.id == 'all_versions':
-                inputs.itemById('version_count').isEnabled = not args.input.value
-            elif args.input.id == 'show_folders':
-                populate_data_projects_list(inputs.itemById('projects'), args.input.value)
+            if args.input.id == I.all_versions:
+                inputs.itemById(I.version_count).isEnabled = not args.input.value
+            elif args.input.id == I.show_folders:
+                populate_data_projects_list(inputs.itemById(I.projects), args.input.value)
 
          except:
             message_box_traceback()
@@ -423,23 +453,37 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             handlers.extend([onExecute, onDestroy, onInputChanged])
 
             inputs = cmd.commandInputs
+            last_settings = load_last_settings()
 
-            inputs.addStringValueInput('directory', 'Directory', str(Path.home() / 'Desktop/Fusion360Export'))
+            export_folder = last_settings.get(I.directory, str(Path.home() / 'Desktop/Fusion360Export'))
+            inputs.addStringValueInput(I.directory, 'Directory', export_folder)
 
-            drop = inputs.addDropDownCommandInput('file_types', 'Export Types', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
+            drop = inputs.addDropDownCommandInput(I.file_types, 'Export Types', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
+            selected_formats = last_settings.get(I.file_types, DEFAULT_SELECTED_FORMATS)
             for format in Format:
-                drop.listItems.add(format.value, format in DEFAULT_SELECTED_FORMATS)
+                drop.listItems.add(format.value, format.value in selected_formats)
 
             #T addBoolValueInput(id, name, checkbox?, icon, default)
-            inputs.addBoolValueInput('show_folders', 'Show Project Folders', True, '', False)
-            drop = inputs.addDropDownCommandInput('projects', 'Export Projects', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
-            populate_data_projects_list(drop)
+            show_folders = last_settings.get(I.show_folders, False)
+            inputs.addBoolValueInput(I.show_folders, 'Show Project Folders', True, '', show_folders)
+            
+            drop = inputs.addDropDownCommandInput(I.projects, 'Export Projects', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
+            projects = last_settings.get(I.projects)
+            populate_data_projects_list(drop, show_folders=show_folders, selected=projects)
 
-            inputs.addBoolValueInput('unhide_all', 'Unhide All Bodies', True, '', True)
+            unhide_all = last_settings.get(I.unhide_all, True)
+            inputs.addBoolValueInput(I.unhide_all, 'Unhide All Bodies', True, '', unhide_all)
+
             versions_group = inputs.addGroupCommandInput('group_versions', 'Versions')
-            versions_group.children.addIntegerSpinnerCommandInput('version_count', 'Number of Previous Versions', 0, 2**16-1, 1, 0)
-            versions_group.children.addBoolValueInput('all_versions', 'Save ALL Versions', True, '', False)
-            inputs.addBoolValueInput('save_sketches', 'Save Sketches as DXF', True, '', False)
+            #T addIntegerSpinnerCommand(id, name, min, max, spinStep, initialValue)
+            version_count = last_settings.get(I.version_count, 0)
+            versions_group.children.addIntegerSpinnerCommandInput(I.version_count, 'Number of Previous Versions', 0, 2**16-1, 1, version_count)
+            
+            all_versions = last_settings.get(I.all_versions, False)
+            versions_group.children.addBoolValueInput(I.all_versions, 'Save ALL Versions', True, '', all_versions)
+            
+            save_sketches = last_settings.get(I.save_sketches, False)
+            inputs.addBoolValueInput(I.save_sketches, 'Save Sketches as DXF', True, '', save_sketches)
         except:
             message_box_traceback()
 
@@ -456,7 +500,7 @@ def selected(inputs):
 
 def make_projects_folders(inputs):
     ret = defaultdict(set)
-    for it in inputs.itemById('projects').listItems:
+    for it in inputs.itemById(I.projects).listItems:
         if it.isSelected:
             project_id, folder_id = project_folders_d[it.name]
             if folder_id is None:  # whole project was selected
@@ -486,19 +530,38 @@ def run_main(ctx):
         if log_fh is not None:
             log_fh.close()
 
+def input_value(inputs, name):
+    return inputs.itemById(name).value
+
+def input_selected(inputs, name):
+    return selected(inputs.itemById(name).listItems)
+
 class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
         try:
             inputs = args.command.commandInputs
-            app = adsk.core.Application.get()
+            iv = partial(input_value, inputs)
+            isel = partial(input_selected, inputs)
+
+            save_last_settings({
+                I.directory: iv(I.directory),
+                I.file_types: isel(I.file_types),
+                I.show_folders: iv(I.show_folders),
+                I.projects: isel(I.projects),
+                I.unhide_all: iv(I.unhide_all),
+                I.save_sketches: iv(I.save_sketches),
+                I.version_count: iv(I.version_count),
+                I.all_versions: iv(I.all_versions),
+            })
+
             ctx = Ctx(
-                app = app,
-                folder = Path(inputs.itemById('directory').value),
-                formats = [FormatFromName[x] for x in selected(inputs.itemById('file_types').listItems)],
+                app = adsk.core.Application.get(),
+                folder = Path(iv(I.directory)),
+                formats = [FormatFromName[x] for x in isel(I.file_types)],
                 projects_folders = make_projects_folders(inputs),
-                unhide_all = inputs.itemById('unhide_all').value,
-                save_sketches = inputs.itemById('save_sketches').value,
-                num_versions = -1 if inputs.itemById('all_versions').value else inputs.itemById('version_count').value,
+                unhide_all = iv(I.unhide_all),
+                save_sketches = iv(I.save_sketches),
+                num_versions = -1 if iv(I.all_versions) else iv(I.version_count),
             )
             run_main(ctx)
         except:
