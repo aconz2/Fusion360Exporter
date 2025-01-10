@@ -302,6 +302,7 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
     if file.fileExtension != 'f3d':
         if not ctx.export_non_design_files:
             log(f'Skipping non-design file {file.name} with extension {file.fileExtension}')
+            counter.skipped += 1
             return counter
 
         log(f'file {file.name} has extension {file.fileExtension} attempting direct download')
@@ -309,7 +310,8 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
         try:
             output_path = ctx.folder / f'{sanitize_filename(file.name)}.{file.fileExtension}'
             if output_path_exists(output_path, LazyDocument(ctx, file)):
-                return Counter(skipped=1)
+                counter.skipped += 1
+                return counter
 
             output_path.parent.mkdir(exist_ok=True, parents=True)
 
