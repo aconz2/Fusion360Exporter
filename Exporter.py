@@ -79,6 +79,7 @@ class Ctx(NamedTuple):
     unhide_all: bool
     save_sketches: bool
     num_versions: int # -1 means all versions
+    export_non_design_files: bool
 
     def extend(self, other):
         return self._replace(folder=self.folder / other)
@@ -296,12 +297,37 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
 def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
     log(f'Visiting file {file.name} v{file.versionNumber}.{file.fileExtension}')
 
+    counter = Counter()
+
     if file.fileExtension != 'f3d':
-        log(f'file {file.name} has extension {file.fileExtension} which is not currently handled, skipping')
-        return Counter(skipped=1)
+        if not ctx.export_non_design_files:
+            log(f'Skipping non-design file {file.name} with extension {file.fileExtension}')
+            counter.skipped += 1
+            return counter
+
+        log(f'file {file.name} has extension {file.fileExtension} attempting direct download')
+
+        try:
+            output_path = ctx.folder / f'{sanitize_filename(file.name)}.{file.fileExtension}'
+            if output_path_exists(output_path, LazyDocument(ctx, file)):
+                counter.skipped += 1
+                return counter
+
+            output_path.parent.mkdir(exist_ok=True, parents=True)
+
+            file.download(str(output_path), None)  # Synchronous download
+
+            set_mtime(output_path, file.dateModified)
+            log(f'Saved {output_path}')
+            counter.saved += 1
+
+        except Exception:
+            counter.errored += 1
+            log(traceback.format_exc())
+
+        return counter
 
     with LazyDocument(ctx, file) as doc:
-        counter = Counter()
 
         if ctx.save_sketches:
             doc.open()
@@ -314,7 +340,7 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
                 counter.errored += 1
                 log(traceback.format_exc())
 
-        return counter
+    return counter
 
 def file_versions(file: adsk.core.DataFile, num_versions):
     # file.versions (should) start with the current/latest version
@@ -406,6 +432,7 @@ class I(StrEnum):
     all_versions = 'all_versions'
     save_sketches = 'save_sketches'
     version_separator_is_space = 'version_separator_is_space'
+    export_non_design_files = 'export_non_design_files'
 
 def populate_data_projects_list(dropdown, show_folders=False, selected=None):
     app = adsk.core.Application.get()
@@ -488,6 +515,9 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
 
             version_separator_is_space = last_settings.get(I.version_separator_is_space, VERSION_SEPARATOR == ' ')
             inputs.addBoolValueInput(I.version_separator_is_space, 'Version Separator is Space', True, '', version_separator_is_space)
+
+            export_non_design_files = last_settings.get(I.export_non_design_files, False)
+            inputs.addBoolValueInput(I.export_non_design_files, 'Export Non-Design Files', True, '', export_non_design_files)
         except:
             message_box_traceback()
 
@@ -557,6 +587,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 I.version_count: iv(I.version_count),
                 I.all_versions: iv(I.all_versions),
                 I.version_separator_is_space: iv(I.version_separator_is_space),
+                I.export_non_design_files: iv(I.export_non_design_files),
             })
 
             # kinda hacky
@@ -572,6 +603,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 unhide_all = iv(I.unhide_all),
                 save_sketches = iv(I.save_sketches),
                 num_versions = -1 if iv(I.all_versions) else iv(I.version_count),
+                export_non_design_files = iv(I.export_non_design_files),
             )
             run_main(ctx)
         except:
