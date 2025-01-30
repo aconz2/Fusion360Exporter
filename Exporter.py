@@ -201,7 +201,7 @@ def set_mtime(path: Path, time: int):
     """utime wants to set atime and mtime, we just set it the same"""
     os.utime(path, (time, time))
 
-def output_path_exists(path: Path, doc: LazyDocument) -> bool:
+def output_path_exists(path: Path, file: adsk.core.DataFile) -> bool:
     """
     Check if the file path already exists with version extension.
     Also checks for archived versions of the files to export and if update_existing_file_times
@@ -209,7 +209,7 @@ def output_path_exists(path: Path, doc: LazyDocument) -> bool:
     """
     if path.exists():
         if update_existing_file_times:
-            set_mtime(path, doc.file.dateModified)
+            set_mtime(path, file.dateModified)
             log(f'{path} already exists, but mtime was corrected')
         else:
             log(f'{path} already exists, skipping')
@@ -227,7 +227,7 @@ def output_path_exists(path: Path, doc: LazyDocument) -> bool:
 # sketch   : adsk.core.Sketch likewise
 def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
     output_path = ctx.folder / f'{sanitize_filename(sketch.name)}.dxf'
-    if output_path_exists(output_path, doc):
+    if output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
     log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
@@ -250,14 +250,15 @@ def visit_sketches(ctx: Ctx, doc: LazyDocument, component):
 
     return counter
 
-def export_filename(ctx: Ctx, format: Format, file: adsk.core.DataFile):
+def export_filename(ctx: Ctx, file: adsk.core.DataFile, format: Format=None):
+    extension = file.fileExtension if format is None else format.value
     sanitized = sanitize_filename(file.name)
-    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{format.value}'
+    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{extension}'
     return ctx.folder / name
 
 def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
-    output_path = export_filename(ctx, format, doc.file)
-    if output_path_exists(output_path, doc):
+    output_path = export_filename(ctx, doc.file, format)
+    if output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
     doc.open()
@@ -308,8 +309,8 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
         log(f'file {file.name} has extension {file.fileExtension} attempting direct download')
 
         try:
-            output_path = ctx.folder / f'{sanitize_filename(file.name)}.{file.fileExtension}'
-            if output_path_exists(output_path, LazyDocument(ctx, file)):
+            output_path = export_filename(ctx, file)
+            if output_path_exists(output_path, file):
                 counter.skipped += 1
                 return counter
 
