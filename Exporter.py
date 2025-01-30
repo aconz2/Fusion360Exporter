@@ -548,12 +548,14 @@ def run_main(ctx):
         app = adsk.core.Application.get()
         ui = app.userInterface
         counter = main(ctx)
-        ui.messageBox('\n'.join((
+        summary = '\n'.join((
             f'Saved {counter.saved} files',
             f'Skipped {counter.skipped} files',
             f'Encountered {counter.errored} errors',
             f'Log file is at {log_file}'
-        )))
+        ))
+        log(summary)
+        ui.messageBox(summary)
 
     except:
         tb = traceback.format_exc()
