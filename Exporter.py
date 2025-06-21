@@ -115,7 +115,7 @@ class LazyDocument:
     def open(self):
         if self._document is not None:
             return
-        log(f'Opening `{self.file.name}`')
+        log(f'Opening `{self.file.name}` v{self.file.versionNumber}')
         self._document = self._ctx.app.documents.open(self.file)
         self._document.activate()
 
@@ -125,7 +125,7 @@ class LazyDocument:
     def close(self):
         if self._document is None:
             return
-        log(f'Closing {self.file.name}')
+        log(f'Closing `{self.file.name}` v{self.file.versionNumber}')
         self._document.close(False)  # don't save changes
 
     @property
@@ -350,13 +350,13 @@ def file_versions(file: adsk.core.DataFile, num_versions):
     # but versionNumber does appear to always be an int so far, not sure where that error creeps in
     # so we just have to resort by int
     # it's possible this is not ideal for very large version counts if the swig layer is actually lazy
-    # and so we force the iterator, but not sure, and idk how to avoid it and still get the versions in the 
+    # and so we force the iterator, but not sure, and idk how to avoid it and still get the versions in the
     # right order.
     versions = sorted(file.versions, key=lambda x: x.versionNumber, reverse=True)
 
     if versions[0].versionNumber != file.versionNumber:
         raise Exception(f'Expected versions[0] to be current file version, but got {versions[0].versionNumber}')
-    
+
     if num_versions == -1:
         versions = versions[1:]
     else:
@@ -495,7 +495,7 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             #T addBoolValueInput(id, name, checkbox?, icon, default)
             show_folders = last_settings.get(I.show_folders, False)
             inputs.addBoolValueInput(I.show_folders, 'Show Project Folders', True, '', show_folders)
-            
+
             drop = inputs.addDropDownCommandInput(I.projects, 'Export Projects', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
             projects = last_settings.get(I.projects)
             populate_data_projects_list(drop, show_folders=show_folders, selected=projects)
@@ -507,10 +507,10 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             #T addIntegerSpinnerCommand(id, name, min, max, spinStep, initialValue)
             version_count = last_settings.get(I.version_count, 0)
             versions_group.children.addIntegerSpinnerCommandInput(I.version_count, 'Number of Previous Versions', 0, 2**16-1, 1, version_count)
-            
+
             all_versions = last_settings.get(I.all_versions, False)
             versions_group.children.addBoolValueInput(I.all_versions, 'Save ALL Versions', True, '', all_versions)
-            
+
             save_sketches = last_settings.get(I.save_sketches, False)
             inputs.addBoolValueInput(I.save_sketches, 'Save Sketches as DXF', True, '', save_sketches)
 
