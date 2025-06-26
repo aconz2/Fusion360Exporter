@@ -123,18 +123,57 @@ class Folder:
     dataFiles: List[File]
     dataFolders: List['Folder']
 
-ctx = Exporter.Ctx(
-    app=App(
+def default_config(**kwargs):
+    d = dict(
+        folder=Path('/out'),
+        formats=[Exporter.Format.F3D, Exporter.Format.STEP],
+        projects_folders={},
+        unhide_all=True,
+        save_sketches=True,
+        num_versions=-1,
+        export_non_design_files=True,
+        filepath_file_formatter=Exporter.FilepathFormatter('{project}/{folders:sep=/}/{file} v{version}.{ext}'),
+        filepath_component_formatter=Exporter.FilepathFormatter('{project}/{folders:sep=/}/{file}/{components:sep=_}/{name} v{version}.{ext}'),
+        per_component=True,
+        force=False,
+    )
+    d = {**d, **kwargs}
+    return Exporter.Config(**d)
+
+def default_ctx(config, project_name='project1'):
+    app = App(
         documents=Documents(),
-    ),
-    folder=Path('/tmp'),
-    formats=[Exporter.Format.F3D, Exporter.Format.STEP],
-    projects_folders={},
-    unhide_all=True,
-    save_sketches=True,
-    num_versions=-1,
-    export_non_design_files=True,
-)
+    )
+    return Exporter.Ctx.new(config, project_name, app)
+
+def run(ctx, folder):
+    g_record_set_mtimes.reset()
+    counter = Exporter.visit_folder(ctx, folder)
+    saves = g_record_set_mtimes.saves
+    return counter, saves
+
+ANY_FAILED = False
+
+def test(ctx, folder, expected):
+    counter, saves = run(ctx, folder)
+    expected = set(expected)
+    saves = set(map(str, saves))
+    if expected == saves:
+        print('PASS')
+        return
+    expected_not_saved = sorted(expected - saves)
+    if expected_not_saved:
+        print('--- expected but was not saved ---')
+    for x in expected_not_saved:
+        print(f'{x!r},')
+    saved_not_expected = sorted(saves - expected)
+    if saved_not_expected:
+        print('-- saved but was not expected ---')
+    for x in saved_not_expected:
+        print(f'{x!r},')
+    global ANY_FAILED
+    any_failed = True
+
 file1 = File(
     name='file1',
     fileExtension='f3d',
@@ -162,13 +201,57 @@ folder = Folder(
     dataFolders=[],
 )
 
-def run(ctx, folder):
-    g_record_set_mtimes.reset()
-    counter = Exporter.visit_folder(ctx, folder)
-    saves = g_record_set_mtimes.saves
-    return counter, saves
+ctx = default_ctx(default_config())
+test(ctx, folder, [
+    '/out/project1/folder1/file1/component1/component1 v1.f3d',
+    '/out/project1/folder1/file1/component1/component1 v1.step',
+    '/out/project1/folder1/file1/component1/component1 v2.f3d',
+    '/out/project1/folder1/file1/component1/component1 v2.step',
+    '/out/project1/folder1/file1/component1/component1 v3.f3d',
+    '/out/project1/folder1/file1/component1/component1 v3.step',
+    '/out/project1/folder1/file1/component1/sketch1 v1.dxf',
+    '/out/project1/folder1/file1/component1/sketch1 v2.dxf',
+    '/out/project1/folder1/file1/component1/sketch1 v3.dxf',
+    '/out/project1/folder1/file1/component1_component1a/component1a v1.f3d',
+    '/out/project1/folder1/file1/component1_component1a/component1a v1.step',
+    '/out/project1/folder1/file1/component1_component1a/component1a v2.f3d',
+    '/out/project1/folder1/file1/component1_component1a/component1a v2.step',
+    '/out/project1/folder1/file1/component1_component1a/component1a v3.f3d',
+    '/out/project1/folder1/file1/component1_component1a/component1a v3.step',
+])
 
-counter, saves = run(ctx, folder)
-print('counter', counter)
-for file in saves:
-    print('saved', file)
+ctx = default_ctx(default_config(per_component=False))
+test(ctx, folder, [
+    '/out/project1/folder1/file1 v1.f3d',
+    '/out/project1/folder1/file1 v1.step',
+    '/out/project1/folder1/file1 v2.f3d',
+    '/out/project1/folder1/file1 v2.step',
+    '/out/project1/folder1/file1 v3.f3d',
+    '/out/project1/folder1/file1 v3.step',
+    '/out/project1/folder1/file1/component1/sketch1 v1.dxf',
+    '/out/project1/folder1/file1/component1/sketch1 v2.dxf',
+    '/out/project1/folder1/file1/component1/sketch1 v3.dxf',
+])
+
+ctx = default_ctx(default_config(per_component=False, save_sketches=False))
+test(ctx, folder, [
+    '/out/project1/folder1/file1 v1.f3d',
+    '/out/project1/folder1/file1 v1.step',
+    '/out/project1/folder1/file1 v2.f3d',
+    '/out/project1/folder1/file1 v2.step',
+    '/out/project1/folder1/file1 v3.f3d',
+    '/out/project1/folder1/file1 v3.step',
+])
+
+ctx = default_ctx(default_config(per_component=False, save_sketches=False, num_versions=0))
+test(ctx, folder, [
+    '/out/project1/folder1/file1 v3.f3d',
+    '/out/project1/folder1/file1 v3.step',
+])
+
+f = Exporter.FilepathFormatter('{project}/{folders:sep=/}/{components:sep=_}/{file} v{version}.{ext}')
+assert f.format(project='p1', folders=('f1', 'f2'), components=('c1', 'c2'), file='file', version=2, ext='stl') == 'p1/f1/f2/c1_c2/file v2.stl'
+assert f.format(project='p1', folders=('f1', 'f2'), components=(), file='file', version=2, ext='stl') == 'p1/f1/f2//file v2.stl'
+
+if ANY_FAILED:
+    sys.exit(1)

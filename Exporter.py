@@ -2,7 +2,7 @@ import adsk.core
 import traceback
 from pathlib import Path
 from datetime import datetime
-from typing import NamedTuple, List, Set, Dict
+from typing import NamedTuple, List, Set, Dict, Tuple
 from enum import Enum, StrEnum
 from dataclasses import dataclass
 import hashlib
@@ -12,14 +12,12 @@ import itertools
 import json
 import os
 from functools import partial
+import string
 
 # If you have a bunch of files already existing and really want the files' date-modified attr
 # to be correct but don't want to rerun an export, you can change this to True for a single run, then
 # probably change it back so you're not spamming the pointless attr change every time
 update_existing_file_times = False
-
-# Older versions of this script used '_' as seperator but Fusion 360 uses ' ' per default in manual exports.
-VERSION_SEPARATOR = '_' # use either ' ' or '_'
 
 log_file = None
 log_fh = None
@@ -65,14 +63,53 @@ class Format(Enum):
     SMT = 'smt'
     TMF = '3mf'
 
+class FormatSketch(Enum):
+    DXF = 'dxf'
+
 FormatFromName = {x.value: x for x in Format}
 
 DEFAULT_SELECTED_FORMATS = {Format.F3D.value, Format.STEP.value}
+DEFAULT_OUTPUT_PATH_FILE_TEMPLATE = '{project}/{folders:sep=/}/{file} v{version}.{ext}'
+DEFAULT_OUTPUT_PATH_COMPONENT_TEMPLATE = '{project}/{folders:sep=/}/{file}/{components:sep=/}/{name} v{version}.{ext}'
 
-archive_extensions = ['.zip', '.rar', '.gz', '.tar.gz', '.tar.bz2', '.tar.xz']
+ARCHIVE_EXTENSIONS = ['.zip', '.rar', '.gz', '.tar.gz', '.tar.bz2', '.tar.xz']
 
-class Ctx(NamedTuple):
-    app: adsk.core.Application
+class FilepathFormatter:
+    supported_fields = [
+        'project',
+        'folders',
+        'components',
+        'file',
+        'ext',
+        'version',
+        'name',
+        ]
+    def __init__(self, format_string):
+        self._sep = {
+            'folders': '/',
+            'components': '/',
+            }
+        parts = []
+        for literal, field, format_spec, _conversion in string.Formatter().parse(format_string):
+            if field not in FilepathFormatter.supported_fields:
+                raise KeyError('field not supported', field)
+            for k in ['folders', 'components']:
+                if field == k and format_spec.startswith('sep='):
+                    self._sep[k] = format_spec.removeprefix('sep=')
+            if literal is not None:
+                parts.append(literal)
+            if field is not None:
+                parts.append(f'{{{field}}}')
+
+        self._format = ''.join(parts)
+
+    def format(self, **kwargs):
+        for k in self._sep:
+            if k in kwargs:
+                kwargs[k] = self._sep[k].join(kwargs[k])
+        return self._format.format(**kwargs)
+
+class Config(NamedTuple):
     folder: Path
     formats: List[Format]
     projects_folders: Dict[str, List[str]] # {projectId: [folderId+]} empty list is taken to mean "no filter"
@@ -80,31 +117,56 @@ class Ctx(NamedTuple):
     save_sketches: bool
     num_versions: int # -1 means all versions
     export_non_design_files: bool
-
-    def extend(self, other):
-        return self._replace(folder=self.folder / other)
-
-    def to_dict(self):
-        d = self._asdict()
-        d.pop('app')
-        d['folder'] = str(d['folder'])
-        d['formats'] = [x.value for x in d['formats']]
-        d['projects_folders'] = {k: list(v) for k, v in d['projects_folders'].items()}
-        return d
+    filepath_file_formatter: FilepathFormatter
+    filepath_component_formatter: FilepathFormatter
+    per_component: bool
+    force: bool
 
     def dumps(self):
-        return json.dumps(self.to_dict(), indent=2)
+        d = self._asdict()
+        d['formats'] = [x.value for x in d['formats']]
+        d['projects_folders'] = {k: list(v) for k, v in d['projects_folders'].items()}
+        return json.dumps(d, indent=2)
 
-    @classmethod
-    def from_dict(cls, d, app):
-        d['app'] = app
-        d['folder'] = Path(d['folder'])
-        d['formats'] = [FormatFromName[x] for x in d['formats']]
-        d['projects_folders'] = {k: set(v) for k, v in d['projects_folders'].items()}
-        return cls(**d)
+class Ctx(NamedTuple):
+    app: adsk.core.Application
+    config: Config
+    project: str
+    folders: Tuple[str]
+    components: Tuple[str]
 
-    def has_show_folders(self):
-        return any(len(v) > 0 for v in self.projects_folders.values())
+    @staticmethod
+    def new(config: Config, project: str, app=None):
+        project = sanitize_filename(project)
+        if app is None:
+            app = adsk.core.Application.get()
+        return Ctx(
+            app=app,
+            config=config,
+            project=project,
+            folders=(),
+            components=(),
+            )
+
+    def with_folder(self, name: str):
+        name = sanitize_filename(name)
+        return Ctx(
+            app=self.app,
+            config=self.config,
+            project=self.project,
+            components=self.components,
+            folders=self.folders + (name,)
+            )
+
+    def with_component(self, name: str):
+        name = sanitize_filename(name)
+        return Ctx(
+            app=self.app,
+            config=self.config,
+            project=self.project,
+            components=self.components + (name,),
+            folders=self.folders,
+            )
 
 class LazyDocument:
     def __init__(self, ctx: Ctx, file: adsk.core.DataFile):
@@ -119,7 +181,7 @@ class LazyDocument:
         self._document = self._ctx.app.documents.open(self.file)
         self._document.activate()
 
-        if self._ctx.unhide_all:
+        if self._ctx.config.unhide_all:
             unhide_all_in_document(self._document)
 
     def close(self):
@@ -135,6 +197,10 @@ class LazyDocument:
     @property
     def rootComponent(self):
         return self.design.rootComponent
+
+    @property
+    def exportManager(self):
+        return self.design.exportManager
 
     def __enter__(self):
         return self
@@ -193,7 +259,7 @@ def sanitize_filename(name: str) -> str:
     with_replacement = re.sub(r'[:\\/*?<>|"]', ' ', name)
     if name == with_replacement:
         return name
-    log(f'filename `{name}` contained bad chars, replacing by `{with_replacement}`')
+    # log(f'filename `{name}` contained bad chars, replacing by `{with_replacement}`')
     hash = hashlib.sha256(name.encode()).hexdigest()[:8]
     return f'{with_replacement}_{hash}'
 
@@ -215,7 +281,7 @@ def output_path_exists(path: Path, file: adsk.core.DataFile) -> bool:
             log(f'{path} already exists, skipping')
         return True
 
-    for archive_extension in archive_extensions:
+    for archive_extension in ARCHIVE_EXTENSIONS:
         archive_path = path.with_name(path.name + archive_extension)
         if archive_path.exists():
             log(f'{path} already exists as archive, skipping')
@@ -223,11 +289,40 @@ def output_path_exists(path: Path, file: adsk.core.DataFile) -> bool:
 
     return False
 
+def export_filepath(ctx: Ctx, file: str, version: int, ext: str, name: str=None):
+    if name is None:
+        name = sanitize_filename(file)
+        formatter = ctx.config.filepath_file_formatter
+    else:
+        formatter = ctx.config.filepath_component_formatter
+    file = sanitize_filename(file)
+    path = formatter.format(
+        project=ctx.project,
+        folders=ctx.folders,
+        components=ctx.components,
+        file=file,
+        ext=ext,
+        version=version,
+        name=name,
+        )
+    return ctx.config.folder / path
+
+def visit_components(ctx: Ctx, doc: LazyDocument):
+    def go(ctx, component):
+        ctx = ctx.with_component(component.name)
+        yield ctx, component
+
+        for occurrence in component.occurrences:
+            yield from go(ctx, occurrence.component)
+
+    doc.open()
+    return go(ctx, doc.rootComponent)
+
 # component: adsk.core.Component but that doesn't exist for some reason?
 # sketch   : adsk.core.Sketch likewise
 def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
-    output_path = ctx.folder / f'{sanitize_filename(sketch.name)}.dxf'
-    if output_path_exists(output_path, doc.file):
+    output_path = export_filepath(ctx, doc.file.name, doc.file.versionNumber, 'dxf', sketch.name)
+    if ctx.config.force or output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
     log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
@@ -236,55 +331,52 @@ def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
     set_mtime(output_path, doc.file.dateModified)
     return Counter(saved=1)
 
-def visit_sketches(ctx: Ctx, doc: LazyDocument, component):
+def export_sketches(ctx: Ctx, doc: LazyDocument):
     counter = Counter()
-    for sketch in component.sketches:
-        try:
-            counter += export_sketch(ctx, doc, component, sketch)
-        except Exception:
-            log(traceback.format_exc())
-            counter.errored += 1
-
-    for occurrence in component.occurrences:
-        counter += visit_sketches(ctx.extend(sanitize_filename(occurrence.name)), doc, occurrence.component)
+    for ctx, component in visit_components(ctx, doc):
+        for sketch in component.sketches:
+            try:
+                counter += export_sketch(ctx, doc, component, sketch)
+            except Exception:
+                log(traceback.format_exc())
+                counter.errored += 1
 
     return counter
 
-def export_filename(ctx: Ctx, file: adsk.core.DataFile, format: Format=None):
-    extension = file.fileExtension if format is None else format.value
-    sanitized = sanitize_filename(file.name)
-    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{extension}'
-    return ctx.folder / name
+def export_file(ctx: Ctx, format: Format, doc: LazyDocument, component=None) -> Counter:
+    if component is None:
+        output_path = export_filepath(ctx, doc.file.name, doc.file.versionNumber, format.value)
+    else:
+        output_path = export_filepath(ctx, doc.file.name, doc.file.versionNumber, format.value, component.name)
 
-def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
-    output_path = export_filename(ctx, doc.file, format)
-    if output_path_exists(output_path, doc.file):
+    if ctx.config.force or output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
     doc.open()
 
-    # I'm just taking this from here https://github.com/tapnair/apper/blob/master/apper/Fusion360Utilities.py
-    # is there a nicer way to do this??
-    design = doc.design
-    em = design.exportManager
+    if component is None:
+        component = doc.rootComponent
+
+    em = doc.exportManager
 
     output_path.parent.mkdir(exist_ok=True, parents=True)
     output_path_s = str(output_path)
 
+    # NOTE: stl and c3mf params are (component, path) and the others are (path, component)
     if format == Format.F3D:
-        options = em.createFusionArchiveExportOptions(output_path_s)
+        options = em.createFusionArchiveExportOptions(output_path_s, component)
     elif format == Format.STL:
-        options = em.createSTLExportOptions(design.rootComponent, output_path_s)
+        options = em.createSTLExportOptions(component, output_path_s)
     elif format == Format.TMF:
-        options = em.createC3MFExportOptions(design.rootComponent, output_path_s)
+        options = em.createC3MFExportOptions(component, output_path_s)
     elif format == Format.STEP:
-        options = em.createSTEPExportOptions(output_path_s)
+        options = em.createSTEPExportOptions(output_path_s, component)
     elif format == Format.IGES:
-        options = em.createIGESExportOptions(output_path_s)
+        options = em.createIGESExportOptions(output_path_s, component)
     elif format == Format.SAT:
-        options = em.createSATExportOptions(output_path_s)
+        options = em.createSATExportOptions(output_path_s, component)
     elif format == Format.SMT:
-        options = em.createSMTExportOptions(output_path_s)
+        options = em.createSMTExportOptions(output_path_s, component)
 
     else:
         raise Exception(f'Got unknown export format {format}')
@@ -309,8 +401,8 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
         log(f'file {file.name} has extension {file.fileExtension} attempting direct download')
 
         try:
-            output_path = export_filename(ctx, file)
-            if output_path_exists(output_path, file):
+            output_path = export_filepath(ctx, file.name, file.versionNumber, file.fileExtension)
+            if ctx.config.force or output_path_exists(output_path, file):
                 counter.skipped += 1
                 return counter
 
@@ -330,16 +422,24 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
 
     with LazyDocument(ctx, file) as doc:
 
-        if ctx.save_sketches:
-            doc.open()
-            counter += visit_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc, doc.rootComponent)
+        if ctx.config.save_sketches:
+            counter += export_sketches(ctx, doc)
 
-        for format in ctx.formats:
-            try:
-                counter += export_file(ctx, format, doc)
-            except Exception:
-                counter.errored += 1
-                log(traceback.format_exc())
+        if ctx.config.per_component:
+            for ctx, component in visit_components(ctx, doc):
+                for format in ctx.config.formats:
+                    try:
+                        counter += export_file(ctx, format, doc, component)
+                    except Exception:
+                        counter.errored += 1
+                        log(traceback.format_exc())
+        else:
+            for format in ctx.config.formats:
+                try:
+                    counter += export_file(ctx, format, doc)
+                except Exception:
+                    counter.errored += 1
+                    log(traceback.format_exc())
 
     return counter
 
@@ -373,13 +473,13 @@ def file_versions(file: adsk.core.DataFile, num_versions):
 def visit_folder(ctx: Ctx, folder, recurse=True) -> Counter:
     log(f'Visiting folder {folder.name}')
 
-    new_ctx = ctx.extend(sanitize_filename(folder.name))
+    new_ctx = ctx.with_folder(folder.name)
 
     counter = Counter()
 
     for file in folder.dataFiles:
         try:
-            for file_version in file_versions(file, ctx.num_versions):
+            for file_version in file_versions(file, ctx.config.num_versions):
                 counter += visit_file(new_ctx, file_version)
         except Exception:
             log(f'Got exception visiting file\n{traceback.format_exc()}')
@@ -391,16 +491,17 @@ def visit_folder(ctx: Ctx, folder, recurse=True) -> Counter:
 
     return counter
 
-def main(ctx: Ctx) -> Counter:
-    init_directory(ctx.folder)
-    init_logging(ctx.folder)
+def main(opt: Config) -> Counter:
+    init_directory(opt.folder)
+    init_logging(opt.folder)
 
-    log(ctx.dumps())
+    log(opt.dumps())
 
     counter = Counter()
 
     for project_id, folder_ids in ctx.projects_folders.items():
         project = ctx.app.data.dataProjects.itemById(project_id)
+        ctx = Ctx.new(opt, project.name)
 
         if folder_ids == []:  # empty filter visit everything
             counter += visit_folder(ctx, project.rootFolder)
@@ -432,8 +533,11 @@ class I(StrEnum):
     version_count = 'version_count'
     all_versions = 'all_versions'
     save_sketches = 'save_sketches'
-    version_separator_is_space = 'version_separator_is_space'
     export_non_design_files = 'export_non_design_files'
+    path_template_file = 'path_template_file'
+    path_template_component = 'path_template_component'
+    per_component = 'per_component'
+    force = 'force'
 
 def populate_data_projects_list(dropdown, show_folders=False, selected=None):
     app = adsk.core.Application.get()
@@ -487,6 +591,12 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             export_folder = last_settings.get(I.directory, str(Path.home() / 'Desktop/Fusion360Export'))
             inputs.addStringValueInput(I.directory, 'Directory', export_folder)
 
+            path_template_file = last_settings.get(I.path_template_file, DEFAULT_OUTPUT_PATH_TEMPLATE)
+            inputs.addStringValueInput(I.path_template_file, 'File Path Template', path_template_file)
+
+            path_template_component = last_settings.get(I.path_template_component, DEFAULT_OUTPUT_PATH_TEMPLATE)
+            inputs.addStringValueInput(I.path_template_component, 'Component Path Template', path_template_component)
+
             drop = inputs.addDropDownCommandInput(I.file_types, 'Export Types', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
             selected_formats = last_settings.get(I.file_types, DEFAULT_SELECTED_FORMATS)
             for format in Format:
@@ -514,11 +624,14 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             save_sketches = last_settings.get(I.save_sketches, False)
             inputs.addBoolValueInput(I.save_sketches, 'Save Sketches as DXF', True, '', save_sketches)
 
-            version_separator_is_space = last_settings.get(I.version_separator_is_space, VERSION_SEPARATOR == ' ')
-            inputs.addBoolValueInput(I.version_separator_is_space, 'Version Separator is Space', True, '', version_separator_is_space)
+            per_component = last_settings.get(I.per_component, False)
+            inputs.addBoolValueInput(I.save_sketches, 'Save Components Individually', True, '', per_component)
 
             export_non_design_files = last_settings.get(I.export_non_design_files, False)
             inputs.addBoolValueInput(I.export_non_design_files, 'Export Non-Design Files', True, '', export_non_design_files)
+
+            force = last_settings.get(I.force, False)
+            inputs.addBoolValueInput(I.save_sketches, 'Overwrite Existing Files', True, '', force)
         except:
             message_box_traceback()
 
@@ -544,11 +657,11 @@ def make_projects_folders(inputs):
                 ret[project_id].add(folder_id)
     return ret
 
-def run_main(ctx):
+def run_main(opt: Config):
     try:
         app = adsk.core.Application.get()
         ui = app.userInterface
-        counter = main(ctx)
+        counter = main(opt)
         summary = '\n'.join((
             f'Saved {counter.saved} files',
             f'Skipped {counter.skipped} files',
@@ -580,26 +693,21 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
             iv = partial(input_value, inputs)
             isel = partial(input_selected, inputs)
 
-            save_last_settings({
-                I.directory: iv(I.directory),
-                I.file_types: isel(I.file_types),
-                I.show_folders: iv(I.show_folders),
-                I.projects: isel(I.projects),
-                I.unhide_all: iv(I.unhide_all),
-                I.save_sketches: iv(I.save_sketches),
-                I.version_count: iv(I.version_count),
-                I.all_versions: iv(I.all_versions),
-                I.version_separator_is_space: iv(I.version_separator_is_space),
-                I.export_non_design_files: iv(I.export_non_design_files),
-            })
+            needs_isel = {
+                I.file_types,
+                I.projects,
+                }
 
-            # kinda hacky
-            if iv(I.version_separator_is_space):
-                global VERSION_SEPARATOR
-                VERSION_SEPARATOR = ' '
+            d = {}
+            for k in I:
+                if k in needs_isel:
+                    d[k] = isel(k)
+                else:
+                    d[k] = iv(k)
 
-            ctx = Ctx(
-                app = adsk.core.Application.get(),
+            save_last_settings(d)
+
+            ctx = Config(
                 folder = Path(iv(I.directory)),
                 formats = [FormatFromName[x] for x in isel(I.file_types)],
                 projects_folders = make_projects_folders(inputs),
@@ -608,7 +716,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 num_versions = -1 if iv(I.all_versions) else iv(I.version_count),
                 export_non_design_files = iv(I.export_non_design_files),
             )
-            run_main(ctx)
+            run_main(opt)
         except:
             message_box_traceback()
 
