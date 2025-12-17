@@ -1,6 +1,8 @@
-This is a Fusion 360 Script to bulk export your files. Currently will export `f3d` files to `f3d`, `igs`, `stp`, `smt`, `sat`, `3mf` and `stl`. Can export drawings to `dxf`.
+This is a Fusion 360 Script to bulk export your files. Can export:
 
-Currently seeking feedback in issue [23](https://github.com/aconz2/Fusion360Exporter/issues/23) on folder output structure.
+* `f3d` files to `f3d`, `igs`, `stp`, `smt`, `sat`, `3mf` and `stl`
+* `f2d` files to `pdf`
+* can export drawings to `dxf`
 
 # Installation
 
@@ -23,18 +25,27 @@ or see the [offical docs](https://www.autodesk.com/support/technical/article/caa
 # Options
 
 1) Directory: This defaults to a folder called Fusion360Exports on your desktop
-2) File types: Select the export file types you want for each file
-3) Projects: Select the projects (or folders) you want to operate on
+2) File types: Select the export file types you want for each file. See [File Types](#FileTypes)
+3) Download Open Folder: Uses the current folder in the Data Panel as the starting folder to initiate an export. See [Projects/Folders](#ProjectsFolders)
+4) Projects: Select the projects (or folders) you want to operate on
     * Show Project Folders: Instead of selecting whole projects, you can select specific folders. See [Projects/Folders](#ProjectsFolders)
-4) Unhide All: When checked, it will unhide all components and all bodies (recursively) so that the exported files contain all bodies
-5) Export Sketches as DXF: Each sketch will get exported as dxf
-6) Versions: Control how many versions are exported. See [Versions](#Versions)
-7) Version Separator Is Space: Controls which character `_` or ` ` (space) is used between the name and version (ie. `name_v42.stl` or `name v42.stl`). Defaults to the original `_` and checking this will use ` ` (space) to better match Fusion.
-8) Export Non-Design Files: If true, all [non-design files](https://help.autodesk.com/view/PLM/ENU/?guid=UG-ATTTAB-ATTACHMENTS) will be exported. Note that only the latest version will be exported and the version number will not be appended. 
+5) Unhide All: When checked, it will unhide all components and all bodies (recursively) so that the exported files contain all bodies
+6) Export Sketches as DXF: Each sketch will get exported as dxf
+7) Versions: Control how many versions are exported. See [Versions](#Versions)
+8) Version Separator Is Space: Controls which character `_` or ` ` (space) is used between the name and version (ie. `name_v42.stl` or `name v42.stl`). Defaults to the original `_` and checking this will use ` ` (space) to better match Fusion.
+9) Export Non-Design Files: If true, all [non-design files](https://help.autodesk.com/view/PLM/ENU/?guid=UG-ATTTAB-ATTACHMENTS) will be exported. Note that only the latest version will be exported and the version number will not be appended.
 
 The last run's settings are loaded by default (if they exist). They are stored next to the `Exporter.py` file on your file system in a file called `last_settings.json`. In "My Scripts", you can right-click "Exporter" and then "Open file location" to get there. If you rename projects or folders you will have to reselect those projects.
 
+# File Types
+
+To export `f2d` files as `pdf` (this is the only available option; they cannot be downloaded as f2d), select `PDF` for the export type.
+
+All other file types apply to `f3d`.
+
 # Projects/Folders
+
+If `Download Open Folder` is selected, the files will be saved with all parent folders created to match the structure in Fusion. For example, if `A/B/C` is the active folder, then we export everything in and beneath folder `C` and those get saved on your computer as `<export directory>/A/B/C/<file name etc>`
 
 By default, selecting a project from `Export Projects` will go through every file in every folder recursively.
 
@@ -83,6 +94,7 @@ You might run into an issue with the `VERSION_SEPARATOR` (whether it is export `
 
 1) Saving electronics documents? these are `fbrd` files
 2) Per-component export of `stl` (or other format); currently only the root component is exported with everything in it
+3) Per version export of non f2d/f3d files
 
 # Credit
 
@@ -91,3 +103,9 @@ You might run into an issue with the `VERSION_SEPARATOR` (whether it is export `
 * Installation doc improvement reported by sqlBender
 * Version ordering bug reported and diagnosed by loglow
 * Non-design file support added by [raphael-bmec-co](https://github.com/raphael-bmec-co)
+* f2d support and using active folder by robertkuyper
+
+# Dev
+
+Discussion about some changes are in issue [23](https://github.com/aconz2/Fusion360Exporter/issues/23) on folder output structure. I implemented most of those ideas in the `dev` branch some time ago -- including a way to write tests -- but never felt like it was a great change so it is abandoned.
+
