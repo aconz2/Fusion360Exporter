@@ -15,6 +15,10 @@ This is a Fusion 360 Script to bulk export your files. Can export:
 
 or see the [offical docs](https://www.autodesk.com/support/technical/article/caas/sfdcarticles/sfdcarticles/How-to-install-an-ADD-IN-and-Script-in-Fusion-360.html) though they recommend copying the folder into the scripts directory and restarting which seems more complicated to me.
 
+# Versions
+
+Released versions are tagged with `YYYYMMDD.N` and can be found in the [tags page](https://github.com/aconz2/Fusion360Exporter/tags)
+
 # Usage
 
 1) Goto Scripts and Add-Ins
