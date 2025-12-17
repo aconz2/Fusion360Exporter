@@ -372,14 +372,14 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
             doc.open()
             counter += visit_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc, doc.rootComponent)
 
-        if file.fileExtension == 'f2d' and Format.PDF in ctx.formats :
+        if file.fileExtension == 'f2d' and Format.PDF in ctx.formats:
             try:
                 counter += export_drawing(ctx, Format.PDF, doc)
             except Exception:
                 counter.errored += 1
                 log(traceback.format_exc())
 
-        if file.fileExtension == 'f3d':
+        else if file.fileExtension == 'f3d':
             for format in ctx.formats:
                 if format != Format.PDF:
                     try:
