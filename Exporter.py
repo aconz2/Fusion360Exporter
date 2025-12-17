@@ -78,7 +78,7 @@ class Ctx(NamedTuple):
     folder: Path
     formats: List[Format]
     projects_folders: Dict[str, List[str]] # {projectId: [folderId+]} empty list is taken to mean "no filter"
-    data_panel_selection: bool
+    use_active_folder: bool
     unhide_all: bool
     save_sketches: bool
     num_versions: int # -1 means all versions
@@ -446,7 +446,7 @@ def main(ctx: Ctx) -> Counter:
 
     counter = Counter()
 
-    if ctx.data_panel_selection:
+    if ctx.use_active_folder:
         root_folder = ctx.app.data.activeFolder
         tree_buffer = tree_gen(root_folder)
         new_ctx = ctx.extend(Path(tree_buffer))
@@ -479,7 +479,7 @@ class I(StrEnum):
     """UI input ids"""
     directory = 'directory'
     file_types = 'file_types'
-    data_panel_selection = 'data_panel_selection'
+    use_active_folder = 'use_active_folder'
     show_folders = 'show_folders'
     projects = 'projects'
     unhide_all = 'unhide_all'
@@ -513,7 +513,7 @@ class ExporterCommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             inputs = args.inputs
             if args.input.id == I.all_versions:
                 inputs.itemById(I.version_count).isEnabled = not args.input.value
-            elif args.input.id == I.data_panel_selection:
+            elif args.input.id == I.use_active_folder:
                 inputs.itemById(I.projects).isEnabled = not args.input.value
                 inputs.itemById(I.show_folders).isEnabled = not args.input.value
             elif args.input.id == I.show_folders:
@@ -549,18 +549,18 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             for format in Format:
                 drop.listItems.add(format.value, format.value in selected_formats)
 
-            data_panel_selection = last_settings.get(I.data_panel_selection, False)
-            inputs.addBoolValueInput(I.data_panel_selection, 'Download Open Folder', True, '', data_panel_selection)
+            use_active_folder = last_settings.get(I.use_active_folder, False)
+            inputs.addBoolValueInput(I.use_active_folder, 'Download Open Folder', True, '', use_active_folder)
 
             #T addBoolValueInput(id, name, checkbox?, icon, default)
             show_folders = last_settings.get(I.show_folders, False)
             inputs.addBoolValueInput(I.show_folders, 'Show Project Folders', True, '', show_folders)
-            inputs.itemById(I.show_folders).isEnabled = not data_panel_selection
+            inputs.itemById(I.show_folders).isEnabled = not use_active_folder
 
             drop = inputs.addDropDownCommandInput(I.projects, 'Export Projects', adsk.core.DropDownStyles.CheckBoxDropDownStyle)
             projects = last_settings.get(I.projects)
             populate_data_projects_list(drop, show_folders=show_folders, selected=projects)
-            inputs.itemById(I.projects).isEnabled = not data_panel_selection
+            inputs.itemById(I.projects).isEnabled = not use_active_folder
 
             unhide_all = last_settings.get(I.unhide_all, True)
             inputs.addBoolValueInput(I.unhide_all, 'Unhide All Bodies', True, '', unhide_all)
@@ -646,7 +646,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
             save_last_settings({
                 I.directory: iv(I.directory),
                 I.file_types: isel(I.file_types),
-                I.data_panel_selection : iv(I.data_panel_selection),
+                I.use_active_folder : iv(I.use_active_folder),
                 I.show_folders: iv(I.show_folders),
                 I.projects: isel(I.projects),
                 I.unhide_all: iv(I.unhide_all),
@@ -666,7 +666,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 app = adsk.core.Application.get(),
                 folder = Path(iv(I.directory)),
                 formats = [FormatFromName[x] for x in isel(I.file_types)],
-                data_panel_selection = iv(I.data_panel_selection),
+                use_active_folder = iv(I.use_active_folder),
                 projects_folders = make_projects_folders(inputs),
                 unhide_all = iv(I.unhide_all),
                 save_sketches = iv(I.save_sketches),
