@@ -1,4 +1,5 @@
 import adsk.core
+import adsk.drawing
 import traceback
 from pathlib import Path
 from datetime import datetime
@@ -64,6 +65,7 @@ class Format(Enum):
     SAT = 'sat'
     SMT = 'smt'
     TMF = '3mf'
+    PDF = 'pdf'
 
 FormatFromName = {x.value: x for x in Format}
 
@@ -119,7 +121,7 @@ class LazyDocument:
         self._document = self._ctx.app.documents.open(self.file)
         self._document.activate()
 
-        if self._ctx.unhide_all:
+        if self._ctx.unhide_all and self.file.fileExtension != 'f2d':
             unhide_all_in_document(self._document)
 
     def close(self):
@@ -295,12 +297,35 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
 
     return Counter(saved=1)
 
+def export_drawing(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
+    output_path = export_filename(ctx, doc.file, format)
+    if output_path_exists(output_path, doc.file):
+        return Counter(skipped=1)
+
+    doc.open()
+
+    drawing = adsk.drawing.Drawing.cast(ctx.app.activeProduct)
+    em: adsk.drawing.DrawingExportManager = drawing.exportManager
+
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    output_path_s = str(output_path)
+
+    options = em.createPDFExportOptions(output_path_s)
+
+    em.execute(options)
+    log(f'PDF created {output_path}')
+    set_mtime(output_path, doc.file.dateModified)
+    log(f'Saved {output_path}')
+
+    return Counter(saved=1)
+
+
 def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
     log(f'Visiting file {file.name} v{file.versionNumber}.{file.fileExtension}')
 
     counter = Counter()
 
-    if file.fileExtension != 'f3d':
+    if file.fileExtension != 'f3d' and file.fileExtension != 'f2d':
         if not ctx.export_non_design_files:
             log(f'Skipping non-design file {file.name} with extension {file.fileExtension}')
             counter.skipped += 1
@@ -330,16 +355,25 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
 
     with LazyDocument(ctx, file) as doc:
 
-        if ctx.save_sketches:
+        if ctx.save_sketches and file.fileExtension != 'f2d':
             doc.open()
             counter += visit_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc, doc.rootComponent)
 
-        for format in ctx.formats:
+        if file.fileExtension == 'f2d' and Format.PDF in ctx.formats :
             try:
-                counter += export_file(ctx, format, doc)
+                counter += export_drawing(ctx, Format.PDF, doc)
             except Exception:
                 counter.errored += 1
                 log(traceback.format_exc())
+
+        if file.fileExtension == 'f3d':
+            for format in ctx.formats:
+                if format != Format.PDF:
+                    try:
+                        counter += export_file(ctx, format, doc)
+                    except Exception:
+                        counter.errored += 1
+                        log(traceback.format_exc())
 
     return counter
 
