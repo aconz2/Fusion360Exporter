@@ -434,26 +434,26 @@ def main(ctx: Ctx) -> Counter:
 
     counter = Counter()
 
-    for project_id, folder_ids in ctx.projects_folders.items():
-        project = ctx.app.data.dataProjects.itemById(project_id)
-        
-        if ctx.data_panel_selection:
-            counter += visit_folder(ctx, ctx.app.data.activeFolder)
-            
-        elif folder_ids == [] and not ctx.data_panel_selection:  # empty filter visit everything
-            counter += visit_folder(ctx, project.rootFolder)
+    if ctx.data_panel_selection:
+        counter += visit_folder(ctx, ctx.app.data.activeFolder)
+    else:
+        for project_id, folder_ids in ctx.projects_folders.items():
+            project = ctx.app.data.dataProjects.itemById(project_id)
 
-        # if the root folder is the only thing selected, we take that to mean no recurse
-        elif folder_ids == [project.rootFolder.id] and not ctx.data_panel_selection:
-            counter += visit_folder(ctx, project.rootFolder, recurse=False)
+            if folder_ids == []:  # empty filter visit everything
+                counter += visit_folder(ctx, project.rootFolder)
 
-        else:
-            folders = project.rootFolder.dataFolders
-            # hmm this doesn't work, the itemsById doesn't return the folder
-            # for folder_id in folder_ids:
-            #     counter += visit_folder(ctx, folders.itemById(folder_id))
-            for folder in filter(lambda x: x.id in folder_ids, folders):
-                counter += visit_folder(ctx, folder)
+            # if the root folder is the only thing selected, we take that to mean no recurse
+            elif folder_ids == [project.rootFolder.id]:
+                counter += visit_folder(ctx, project.rootFolder, recurse=False)
+
+            else:
+                folders = project.rootFolder.dataFolders
+                # hmm this doesn't work, the itemsById doesn't return the folder
+                # for folder_id in folder_ids:
+                #     counter += visit_folder(ctx, folders.itemById(folder_id))
+                for folder in filter(lambda x: x.id in folder_ids, folders):
+                    counter += visit_folder(ctx, folder)
 
     return counter
 
