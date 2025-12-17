@@ -98,7 +98,6 @@ You might run into an issue with the `VERSION_SEPARATOR` (whether it is export `
 
 1) Saving electronics documents? these are `fbrd` files
 2) Per-component export of `stl` (or other format); currently only the root component is exported with everything in it
-3) Per version export of non f2d/f3d files
 
 # Credit
 
