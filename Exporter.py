@@ -379,7 +379,7 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
                 counter.errored += 1
                 log(traceback.format_exc())
 
-        else if file.fileExtension == 'f3d':
+        elif file.fileExtension == 'f3d':
             for format in ctx.formats:
                 if format != Format.PDF:
                     try:
