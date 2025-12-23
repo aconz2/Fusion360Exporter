@@ -107,6 +107,7 @@ You might run into an issue with the `VERSION_SEPARATOR` (whether it is export `
 * Version ordering bug reported and diagnosed by loglow
 * Non-design file support added by [raphael-bmec-co](https://github.com/raphael-bmec-co)
 * f2d support and using active folder by robertkuyper
+* bug fix by hiroloquy
 
 # Dev
 
