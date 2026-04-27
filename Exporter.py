@@ -13,6 +13,8 @@ import itertools
 import json
 import os
 from functools import partial
+import zipfile
+import base64
 
 # If you have a bunch of files already existing and really want the files' date-modified attr
 # to be correct but don't want to rerun an export, you can change this to True for a single run, then
@@ -307,6 +309,13 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     em.execute(options)
     set_mtime(output_path, doc.file.dateModified)
     log(f'Saved {output_path}')
+
+    # add a preview thumbnail
+    if format == Format.F3D:
+        thumb_b64 = design.rootComponent.createThumbnail(256, 256, 'PNG').getAsBase64String()
+        with zipfile.ZipFile(output_path, 'a') as zf:
+            with zf.open('FusionAssetName[Active]/Previews/small.png', 'w') as fh:
+                fh.write(base64.b64decode(thumb_b64))
 
     return Counter(saved=1)
 
