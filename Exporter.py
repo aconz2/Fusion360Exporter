@@ -59,6 +59,8 @@ def save_last_settings(d):
     with open(last_settings_path, 'w') as fh:
         json.dump(d, fh, indent=2)
 
+# Having f3d first dictates the order we process calls to export_file, and we want f3d first so that
+# things aren't unhidden when we take the thumbnail
 class Format(Enum):
     F3D = 'f3d'
     STEP = 'step'
@@ -116,6 +118,7 @@ class LazyDocument:
         self._ctx = ctx
         self._document = None
         self.file = file
+        self.unhidden = False
 
     def open(self):
         if self._document is not None:
@@ -124,8 +127,11 @@ class LazyDocument:
         self._document = self._ctx.app.documents.open(self.file)
         self._document.activate()
 
-        if self._ctx.unhide_all and self.file.fileExtension != 'f2d':
-            unhide_all_in_document(self._document)
+    def unhide_all(self):
+        if self.unhidden:
+            return
+        unhide_all_in_document(self._document)
+        self.unhidden = True
 
     def close(self):
         if self._document is None:
@@ -280,8 +286,6 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
 
     doc.open()
 
-    # I'm just taking this from here https://github.com/tapnair/apper/blob/master/apper/Fusion360Utilities.py
-    # is there a nicer way to do this??
     design = doc.design
     em = design.exportManager
 
@@ -305,6 +309,11 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
 
     else:
         raise Exception(f'Got unknown export format {format}')
+
+    # f3d already saves everything that is hidden and for the thumbnail to look nice, we don't want to unhide everything
+    # Note that because unhiding is a mutation, the order of calls to export_file matters, but f3d will be first
+    if ctx.unhide_all and format != Format.F3D:
+        doc.unhide_all()
 
     em.execute(options)
     set_mtime(output_path, doc.file.dateModified)
@@ -390,12 +399,13 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
 
         elif file.fileExtension == 'f3d':
             for format in ctx.formats:
-                if format != Format.PDF:
-                    try:
-                        counter += export_file(ctx, format, doc)
-                    except Exception:
-                        counter.errored += 1
-                        log(traceback.format_exc())
+                if format == Format.PDF:
+                    continue
+                try:
+                    counter += export_file(ctx, format, doc)
+                except Exception:
+                    counter.errored += 1
+                    log(traceback.format_exc())
 
     return counter
 
