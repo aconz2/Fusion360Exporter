@@ -177,19 +177,29 @@ def design_from_document(document: adsk.core.Document):
 def unhide_all_in_document(document: adsk.core.Document):
     unhide_all_in_component(design_from_document(document).rootComponent)
 
+def show(item, attr='isLightBulbOn'):
+    """
+    Some items can't be changed (eg in externally referenced components), so log and keep going instead
+    of letting one failure stop every non-f3d export of the document
+    """
+    try:
+        setattr(item, attr, True)
+    except Exception:
+        log(f'Could not set {attr} on `{getattr(item, "name", item)}`\n{traceback.format_exc()}')
+
 def unhide_all_in_component(component):
-    component.isBodiesFolderLightBulbOn = True
-    component.isSketchFolderLightBulbOn = True
+    show(component, 'isBodiesFolderLightBulbOn')
+    show(component, 'isSketchFolderLightBulbOn')
 
     for brep in component.bRepBodies:
-        brep.isLightBulbOn = True
+        show(brep)
 
     for body in component.meshBodies:
-        body.isLightBulbOn = True
+        show(body)
 
     # I find the name occurrences very confusing, but apparently that is what a sub-component is called
     for occurrence in component.occurrences:
-        occurrence.isLightBulbOn = True
+        show(occurrence)
         unhide_all_in_component(occurrence.component)
 
 def sanitize_filename(name: str) -> str:
