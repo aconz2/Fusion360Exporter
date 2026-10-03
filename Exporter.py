@@ -418,6 +418,12 @@ def file_versions(file: adsk.core.DataFile, num_versions):
     # it's possible this is not ideal for very large version counts if the swig layer is actually lazy
     # and so we force the iterator, but not sure, and idk how to avoid it and still get the versions in the
     # right order.
+    if num_versions == 0:
+        # only the latest version is wanted and that is `file` itself, so skip fetching the version list,
+        # which is a request to the cloud for every file even when everything is already exported
+        yield file
+        return
+
     versions = sorted(file.versions, key=lambda x: x.versionNumber, reverse=True)
 
     if versions[0].versionNumber != file.versionNumber:
