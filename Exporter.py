@@ -183,7 +183,10 @@ def show(item, attr='isLightBulbOn'):
     of letting one failure stop every non-f3d export of the document
     """
     try:
-        setattr(item, attr, True)
+        # only write when hidden: each write is a change to the design that Fusion has to process, and most
+        # things are already visible
+        if not getattr(item, attr):
+            setattr(item, attr, True)
     except Exception:
         log(f'Could not set {attr} on `{getattr(item, "name", item)}`\n{traceback.format_exc()}')
 
