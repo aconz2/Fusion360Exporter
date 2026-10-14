@@ -451,7 +451,8 @@ def file_versions(file: adsk.core.DataFile, num_versions):
     prev = file.versionNumber
     for v in versions:
         if prev - v.versionNumber != 1:
-            raise Exception(f'Versions not contiguous! prev={prev} cur={v.versionNumber}')
+            # don't raise, that would lose every older version of this file
+            log(f'Versions of {file.name} not contiguous, prev={prev} cur={v.versionNumber}, continuing')
         yield v
         prev = v.versionNumber
 
