@@ -65,7 +65,7 @@ By default, only the latest version of each file will be exported. You can chang
 
 For each document in each selected project, it will check that there is a file named `<export directory>/<project name>/<document name><version separator><version name>.<file extension>` OR that file name with a few compressed/archived suffixes (see the code). If that file does not exist, it will open the document and do an export of it, then close it. If there are multiple formats to export, it will only open the document once. The exported file has it's `Date Modified` attribute (or `mtime`) set to the modified date (time) of the document (see File Time section for additional info).
 
-For sketches, it will create a folder hiearchy like `<export directory>/<project name>/<component names ...>/<sketch name>.dxf`.
+For sketches, it will create a folder hiearchy like `<export directory>/<project name>/<component names ...>/<sketch name><version separator><version name>.dxf`. Sketches that share a name within a component get ` (2)`, ` (3)` etc. appended.
 
 Since document names might have invalid filename characters, we attempt to replace them with spaces. In order to avoid a false collision, if any chars are replaced, the document name will have 8 hexchars of sha256 hash of the original utf-8 encoded document name. Eg `model 1/2 \ * ? <morechars> ||` would be saved as `model 1 2        morechars    _29a6fecc_v1.f3d`
 

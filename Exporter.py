@@ -249,8 +249,9 @@ def output_path_exists(path: Path, file: adsk.core.DataFile) -> bool:
 
 # component: adsk.core.Component but that doesn't exist for some reason?
 # sketch   : adsk.core.Sketch likewise
-def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
-    output_path = ctx.folder / f'{sanitize_filename(sketch.name)}.dxf'
+def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch, name: str):
+    # include the document version so that new versions get re-exported instead of skipped
+    output_path = ctx.folder / f'{sanitize_filename(name)}{VERSION_SEPARATOR}v{doc.file.versionNumber}.dxf'
     if output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
@@ -262,9 +263,14 @@ def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
 
 def visit_sketches(ctx: Ctx, doc: LazyDocument, component):
     counter = Counter()
+    # sketch names aren't unique within a component, so number repeats to avoid them clobbering each other
+    name_counts = defaultdict(int)
     for sketch in component.sketches:
+        name_counts[sketch.name] += 1
+        n = name_counts[sketch.name]
+        name = sketch.name if n == 1 else f'{sketch.name} ({n})'
         try:
-            counter += export_sketch(ctx, doc, component, sketch)
+            counter += export_sketch(ctx, doc, component, sketch, name)
         except Exception:
             log(traceback.format_exc())
             counter.errored += 1
