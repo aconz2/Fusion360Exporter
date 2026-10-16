@@ -84,6 +84,10 @@ class File:
     fileExtension: str
     rootComponent: Component
 
+    @property
+    def id(self):
+        return self.name
+
     def with_version(self, version: int):
         return File(
             name=self.name,

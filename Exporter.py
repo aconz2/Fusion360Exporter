@@ -286,9 +286,29 @@ def tree_gen(file: adsk.core.DataFile) -> str:
     folders.reverse()
     return '\\'.join(folders)
 
+# {file id: ' (n)'} for files that would get the same export name as an earlier file in their folder
+same_name_tags = {}
+
+def tag_same_names(files):
+    """
+    Separate designs can have the same name in one folder, which would give them the same export path so
+    only the first got exported. The oldest keeps the plain name and the others get ` (2)`, ` (3)`, ...
+    Compared case-insensitively since Windows and macOS file names are
+    """
+    groups = defaultdict(list)
+    for file in files:
+        groups[(sanitize_filename(file.name).casefold(), file.fileExtension)].append(file)
+    for group in groups.values():
+        # sorted so each design keeps its tag from run to run whatever order Fusion lists them in
+        group.sort(key=lambda f: (getattr(f, 'dateCreated', 0), f.id))
+        for n, file in enumerate(group[1:], start=2):
+            log(f'`{file.name}` has the same name as another file in its folder, exporting it as `{file.name} ({n})`')
+            same_name_tags[file.id] = f' ({n})'
+
 def export_filename(ctx: Ctx, file: adsk.core.DataFile, format: Format=None):
     extension = file.fileExtension if format is None else format.value
-    sanitized = sanitize_filename(file.name)
+    # versions of a file share its id, so they get the same tag
+    sanitized = sanitize_filename(file.name) + same_name_tags.get(file.id, '')
     name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{extension}'
     return ctx.folder / name
 
@@ -462,7 +482,9 @@ def visit_folder(ctx: Ctx, folder, recurse=True) -> Counter:
 
     counter = Counter()
 
-    for file in folder.dataFiles:
+    files = list(folder.dataFiles)
+    tag_same_names(files)
+    for file in files:
         try:
             for file_version in file_versions(file, ctx.num_versions):
                 counter += visit_file(new_ctx, file_version)
