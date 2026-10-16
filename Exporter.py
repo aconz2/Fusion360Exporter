@@ -172,7 +172,22 @@ class Counter:
         return self
 
 def design_from_document(document: adsk.core.Document):
-    return adsk.fusion.FusionDocument.cast(document).design
+    try:
+        return adsk.fusion.FusionDocument.cast(document).design
+    except Exception as e:
+        first_error = e
+    # some documents (seen with Simulation documents) raise InternalValidationError above but may still
+    # have a design product
+    try:
+        design = adsk.fusion.Design.cast(document.products.itemByProductType('DesignProductType'))
+        if design is not None:
+            return design
+    except Exception:
+        pass
+    raise DesignUnavailable(f'Fusion could not provide its design ({first_error})')
+
+class DesignUnavailable(Exception):
+    pass
 
 def unhide_all_in_document(document: adsk.core.Document):
     unhide_all_in_component(design_from_document(document).rootComponent)
@@ -225,6 +240,23 @@ def set_mtime(path: Path, time: int):
     """utime wants to set atime and mtime, we just set it the same"""
     os.utime(path, (time, time))
 
+def write_atomically(output_path: Path, write):
+    """
+    Calls write(tmp_path_str) and only moves the result to output_path if it succeeded. Since existing
+    output files are skipped on later runs, writing directly to output_path would mean a failed or
+    interrupted export leaves a broken file that never gets retried
+    """
+    tmp_path = output_path.with_name(f'{output_path.stem}.partial{output_path.suffix}')
+    tmp_path.unlink(missing_ok=True)
+    try:
+        if write(str(tmp_path)) is False:
+            raise Exception(f'Export to {tmp_path} reported failure')
+        if not tmp_path.exists():
+            raise Exception(f'Export to {tmp_path} did not create a file')
+        os.replace(tmp_path, output_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
 def output_path_exists(path: Path, file: adsk.core.DataFile) -> bool:
     """
     Check if the file path already exists with version extension.
@@ -256,7 +288,7 @@ def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
 
     log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    sketch.saveAsDXF(str(output_path))
+    write_atomically(output_path, sketch.saveAsDXF)
     set_mtime(output_path, doc.file.dateModified)
     return Counter(saved=1)
 
@@ -303,41 +335,45 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     em = design.exportManager
 
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    output_path_s = str(output_path)
-
-    if format == Format.F3D:
-        options = em.createFusionArchiveExportOptions(output_path_s)
-    elif format == Format.STL:
-        options = em.createSTLExportOptions(design.rootComponent, output_path_s)
-    elif format == Format.TMF:
-        options = em.createC3MFExportOptions(design.rootComponent, output_path_s)
-    elif format == Format.STEP:
-        options = em.createSTEPExportOptions(output_path_s)
-    elif format == Format.IGES:
-        options = em.createIGESExportOptions(output_path_s)
-    elif format == Format.SAT:
-        options = em.createSATExportOptions(output_path_s)
-    elif format == Format.SMT:
-        options = em.createSMTExportOptions(output_path_s)
-
-    else:
-        raise Exception(f'Got unknown export format {format}')
 
     # f3d already saves everything that is hidden and for the thumbnail to look nice, we don't want to unhide everything
     # Note that because unhiding is a mutation, the order of calls to export_file matters, but f3d will be first
     if ctx.unhide_all and format != Format.F3D:
         doc.unhide_all()
 
-    em.execute(options)
+    def write(path_s):
+        if format == Format.F3D:
+            options = em.createFusionArchiveExportOptions(path_s)
+        elif format == Format.STL:
+            options = em.createSTLExportOptions(design.rootComponent, path_s)
+        elif format == Format.TMF:
+            options = em.createC3MFExportOptions(design.rootComponent, path_s)
+        elif format == Format.STEP:
+            options = em.createSTEPExportOptions(path_s)
+        elif format == Format.IGES:
+            options = em.createIGESExportOptions(path_s)
+        elif format == Format.SAT:
+            options = em.createSATExportOptions(path_s)
+        elif format == Format.SMT:
+            options = em.createSMTExportOptions(path_s)
+
+        else:
+            raise Exception(f'Got unknown export format {format}')
+
+        if em.execute(options) is False:
+            return False
+
+        # add a preview thumbnail
+        if format == Format.F3D:
+            thumb_b64 = design.rootComponent.createThumbnail(256, 256, 'PNG').getAsBase64String()
+            with zipfile.ZipFile(path_s, 'a') as zf:
+                with zf.open('FusionAssetName[Active]/Previews/small.png', 'w') as fh:
+                    fh.write(base64.b64decode(thumb_b64))
+
+    write_atomically(output_path, write)
+    # set after the thumbnail is added since appending to the zip resets mtime
     set_mtime(output_path, doc.file.dateModified)
     log(f'Saved {output_path}')
-
-    # add a preview thumbnail
-    if format == Format.F3D:
-        thumb_b64 = design.rootComponent.createThumbnail(256, 256, 'PNG').getAsBase64String()
-        with zipfile.ZipFile(output_path, 'a') as zf:
-            with zf.open('FusionAssetName[Active]/Previews/small.png', 'w') as fh:
-                fh.write(base64.b64decode(thumb_b64))
 
     return Counter(saved=1)
 
@@ -352,17 +388,29 @@ def export_drawing(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     em: adsk.drawing.DrawingExportManager = drawing.exportManager
 
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    output_path_s = str(output_path)
 
-    options = em.createPDFExportOptions(output_path_s)
-
-    em.execute(options)
+    write_atomically(output_path, lambda path_s: em.execute(em.createPDFExportOptions(path_s)))
     log(f'PDF created {output_path}')
     set_mtime(output_path, doc.file.dateModified)
     log(f'Saved {output_path}')
 
     return Counter(saved=1)
 
+
+def download_f3d(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
+    """Fallback for when the design can't be opened: Fusion can still download the f3d as it is stored"""
+    output_path = export_filename(ctx, file, Format.F3D)
+    if output_path_exists(output_path, file):
+        return Counter(skipped=1)
+    try:
+        output_path.parent.mkdir(exist_ok=True, parents=True)
+        write_atomically(output_path, lambda path_s: file.download(path_s, None))
+        set_mtime(output_path, file.dateModified)
+        log(f'Saved {output_path} by downloading it as stored, without a thumbnail')
+        return Counter(saved=1)
+    except Exception:
+        log(traceback.format_exc())
+        return Counter(errored=1)
 
 def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
     log(f'Visiting file {file.name} v{file.versionNumber}.{file.fileExtension}')
@@ -385,7 +433,7 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
 
             output_path.parent.mkdir(exist_ok=True, parents=True)
 
-            file.download(str(output_path), None)  # Synchronous download
+            write_atomically(output_path, lambda path_s: file.download(path_s, None))  # Synchronous download
 
             set_mtime(output_path, file.dateModified)
             log(f'Saved {output_path}')
@@ -398,10 +446,16 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
         return counter
 
     with LazyDocument(ctx, file) as doc:
+        design_error_counted = False
 
         if ctx.save_sketches and file.fileExtension != 'f2d':
             doc.open()
-            counter += visit_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc, doc.rootComponent)
+            try:
+                counter += visit_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc, doc.rootComponent)
+            except DesignUnavailable as e:
+                log(f"Can't export sketches of `{file.name}` v{file.versionNumber}: {e}")
+                counter.errored += 1
+                design_error_counted = True
 
         if file.fileExtension == 'f2d' and Format.PDF in ctx.formats:
             try:
@@ -416,6 +470,16 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
                     continue
                 try:
                     counter += export_file(ctx, format, doc)
+                except DesignUnavailable as e:
+                    log(f"Can't export `{file.name}` v{file.versionNumber}: {e}")
+                    remaining = ctx.formats[ctx.formats.index(format):]
+                    if Format.F3D in remaining:
+                        counter += download_f3d(ctx, file)
+                    # every other format needs the design, so count one error for them instead of one per format
+                    if not design_error_counted and any(f not in (Format.F3D, Format.PDF) for f in remaining):
+                        log(f'Skipping the other formats of `{file.name}` v{file.versionNumber}')
+                        counter.errored += 1
+                    break
                 except Exception:
                     counter.errored += 1
                     log(traceback.format_exc())
