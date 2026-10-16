@@ -1,14 +1,18 @@
 import sys
 from pathlib import Path
-sys.path.append(Path(__file__).parent)
+sys.path.append(str(Path(__file__).parent))
 
 from unittest.mock import Mock, MagicMock
 
 sys.modules['adsk'] = Mock()
 sys.modules['adsk.core'] = Mock()
+sys.modules['adsk.drawing'] = Mock()
+sys.modules['adsk.fusion'] = Mock()
 
 from typing import List, Any
 from dataclasses import dataclass
+import tempfile
+import zipfile
 
 import Exporter
 
@@ -36,15 +40,34 @@ def LazyDocument_rootComponent(self):
     return self._document._file.rootComponent
 
 Exporter.LazyDocument.rootComponent = LazyDocument_rootComponent
-# LazyDocument.design returns a mock because it calls adsk. ... .cast
-# this is convenient b/c .exportManager gets mocked too
+class ExportManager:
+    """create*ExportOptions returns the output path and execute writes a file there, like Fusion does"""
+    def __getattr__(self, name):
+        if name.startswith('create') and name.endswith('ExportOptions'):
+            return lambda *args: args[-1]
+        raise AttributeError(name)
 
-Path.mkdir = Mock()
+    def execute(self, path):
+        # f3d is a zip and gets a thumbnail appended, so write a zip for every format
+        with zipfile.ZipFile(path, 'w') as zf:
+            zf.writestr('design', '')
+        return True
+
+@dataclass
+class Design:
+    rootComponent: Any
+    exportManager: ExportManager
+
+Exporter.design_from_document = lambda document: Design(rootComponent=document._file.rootComponent, exportManager=ExportManager())
 
 @dataclass
 class Documents:
     def open(self, file):
         return Document(_file=file)
+
+    # no documents are already open
+    def __iter__(self):
+        return iter(())
 
 @dataclass
 class App:
@@ -55,7 +78,8 @@ class Sketch:
     name: str
 
     def saveAsDXF(self, path):
-        pass
+        Path(path).write_text(self.name)
+        return True
 
 @dataclass
 class Component:
@@ -68,6 +92,9 @@ class Component:
     @property
     def occurrences(self):
         return [Occurrence(component=c) for c in self.components]
+
+    def createThumbnail(self, width, height, format):
+        return Mock(getAsBase64String=Mock(return_value='aGk='))
 
 @dataclass
 class Occurrence:
@@ -127,9 +154,10 @@ ctx = Exporter.Ctx(
     app=App(
         documents=Documents(),
     ),
-    folder=Path('/tmp'),
+    folder=Path(tempfile.mkdtemp()),
     formats=[Exporter.Format.F3D, Exporter.Format.STEP],
     projects_folders={},
+    use_active_folder=False,
     unhide_all=True,
     save_sketches=True,
     num_versions=-1,
@@ -172,3 +200,8 @@ counter, saves = run(ctx, folder)
 print('counter', counter)
 for file in saves:
     print('saved', file)
+
+# 3 versions, each with 1 sketch, an f3d and a step
+assert counter == Exporter.Counter(saved=9), counter
+assert all(file.exists() for file in saves)
+print('ok')
