@@ -492,21 +492,26 @@ def main(ctx: Ctx) -> Counter:
     else:
         for project_id, folder_ids in ctx.projects_folders.items():
             project = ctx.app.data.dataProjects.itemById(project_id)
+            # folder_ids can be a list or a set depending on where ctx came from, so don't compare with ==
+            folder_ids = set(folder_ids)
 
-            if folder_ids == []:  # empty filter visit everything
+            if not folder_ids:  # empty filter visit everything
                 counter += visit_folder(ctx, project.rootFolder)
+                continue
 
-            # if the root folder is the only thing selected, we take that to mean no recurse
-            elif folder_ids == [project.rootFolder.id]:
+            # selecting the root folder means its files only, no recurse
+            if project.rootFolder.id in folder_ids:
                 counter += visit_folder(ctx, project.rootFolder, recurse=False)
 
-            else:
-                folders = project.rootFolder.dataFolders
-                # hmm this doesn't work, the itemsById doesn't return the folder
-                # for folder_id in folder_ids:
-                #     counter += visit_folder(ctx, folders.itemById(folder_id))
-                for folder in filter(lambda x: x.id in folder_ids, folders):
-                    counter += visit_folder(ctx, folder)
+            # put selected folders under the root folder like a whole project export does. Otherwise they
+            # end up directly in the export directory, where two projects' folders with the same name collide
+            root_ctx = ctx.extend(sanitize_filename(project.rootFolder.name))
+            folders = project.rootFolder.dataFolders
+            # hmm this doesn't work, the itemsById doesn't return the folder
+            # for folder_id in folder_ids:
+            #     counter += visit_folder(ctx, folders.itemById(folder_id))
+            for folder in filter(lambda x: x.id in folder_ids, folders):
+                counter += visit_folder(root_ctx, folder)
 
     return counter
 
