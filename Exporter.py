@@ -87,6 +87,7 @@ class Ctx(NamedTuple):
     save_sketches: bool
     num_versions: int # -1 means all versions
     export_non_design_files: bool
+    version_separator: str = '_'
 
     def extend(self, other):
         return self._replace(folder=self.folder / other)
@@ -106,7 +107,11 @@ class Ctx(NamedTuple):
     def from_dict(cls, d, app):
         d['app'] = app
         d['folder'] = Path(d['folder'])
-        d['formats'] = [FormatFromName[x] for x in d['formats']]
+        # accept both values (`f3d`) and names (`F3D`) so older templates keep working
+        d['formats'] = [FormatFromName[x] if x in FormatFromName else Format[x] for x in d['formats']]
+        # settings saved by older versions don't have these
+        d.setdefault('use_active_folder', False)
+        d.setdefault('export_non_design_files', False)
         d['projects_folders'] = {k: set(v) for k, v in d['projects_folders'].items()}
         return cls(**d)
 
@@ -482,6 +487,10 @@ def main(ctx: Ctx) -> Counter:
 
     log(ctx.dumps())
 
+    # set from ctx (not just the UI) so saved settings scripts name files the same way as the UI run did
+    global VERSION_SEPARATOR
+    VERSION_SEPARATOR = ctx.version_separator
+
     counter = Counter()
 
     if ctx.use_active_folder:
@@ -695,11 +704,6 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 I.export_non_design_files: iv(I.export_non_design_files),
             })
 
-            # kinda hacky
-            if iv(I.version_separator_is_space):
-                global VERSION_SEPARATOR
-                VERSION_SEPARATOR = ' '
-
             ctx = Ctx(
                 app = adsk.core.Application.get(),
                 folder = Path(iv(I.directory)),
@@ -710,6 +714,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 save_sketches = iv(I.save_sketches),
                 num_versions = -1 if iv(I.all_versions) else iv(I.version_count),
                 export_non_design_files = iv(I.export_non_design_files),
+                version_separator = ' ' if iv(I.version_separator_is_space) else '_',
             )
             run_main(ctx)
         except:
