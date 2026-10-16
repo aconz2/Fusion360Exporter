@@ -119,22 +119,37 @@ class LazyDocument:
         self._document = None
         self.file = file
         self.unhidden = False
+        # if the user already has this document open, we must not mutate or close it since that would
+        # throw away their unsaved changes
+        self.was_already_open = False
 
     def open(self):
         if self._document is not None:
             return
-        log(f'Opening `{self.file.name}` v{self.file.versionNumber}')
-        self._document = self._ctx.app.documents.open(self.file)
+        existing = find_open_document(self._ctx.app, self.file)
+        if existing is not None and existing.isModified:
+            # exporting it would save the unsaved edits under this version's name, and later runs would skip it
+            raise Exception(f'`{self.file.name}` v{self.file.versionNumber} is open with unsaved changes, save or close it and run again')
+        if existing is not None:
+            log(f'`{self.file.name}` v{self.file.versionNumber} is already open, using it and leaving it open')
+            self._document = existing
+            self.was_already_open = True
+        else:
+            log(f'Opening `{self.file.name}` v{self.file.versionNumber}')
+            self._document = self._ctx.app.documents.open(self.file)
         self._document.activate()
 
     def unhide_all(self):
         if self.unhidden:
             return
+        if self.was_already_open:
+            log(f'Not unhiding bodies in already open `{self.file.name}`, hidden bodies will be missing from exports')
+            return
         unhide_all_in_document(self._document)
         self.unhidden = True
 
     def close(self):
-        if self._document is None:
+        if self._document is None or self.was_already_open:
             return
         log(f'Closing `{self.file.name}` v{self.file.versionNumber}')
         self._document.close(False)  # don't save changes
@@ -170,6 +185,13 @@ class Counter:
         self.skipped += other.skipped
         self.errored += other.errored
         return self
+
+def find_open_document(app: adsk.core.Application, file: adsk.core.DataFile):
+    for document in app.documents:
+        data_file = document.dataFile
+        if data_file is not None and data_file.id == file.id and data_file.versionNumber == file.versionNumber:
+            return document
+    return None
 
 def design_from_document(document: adsk.core.Document):
     return adsk.fusion.FusionDocument.cast(document).design
