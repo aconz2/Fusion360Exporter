@@ -48,7 +48,7 @@ def init_directory(name):
 def init_logging(directory):
     global log_file, log_fh
     log_file = directory / '{:%Y_%m_%d_%H_%M}.txt'.format(datetime.now())
-    log_fh = open(log_file, 'w', encoding="utf-8")
+    log_fh = open(log_file, 'a', encoding="utf-8")
 
 def load_last_settings():
     if not last_settings_path.exists():
