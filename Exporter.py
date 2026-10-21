@@ -261,7 +261,7 @@ def output_path_exists(path: Path, file: adsk.core.DataFile) -> bool:
 # component: adsk.core.Component but that doesn't exist for some reason?
 # sketch   : adsk.core.Sketch likewise
 def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
-    output_path = ctx.folder / f'{sanitize_filename(sketch.name)}.dxf'
+    output_path = ctx.folder / f'{sanitize_filename(sketch.name)}{VERSION_SEPARATOR}v{doc.file.versionNumber}.dxf'
     if output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
