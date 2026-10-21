@@ -6,6 +6,7 @@ from unittest.mock import Mock, MagicMock
 
 sys.modules['adsk'] = Mock()
 sys.modules['adsk.core'] = Mock()
+sys.modules['adsk.drawing'] = Mock()
 
 from typing import List, Any
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ Exporter.init_directory = Mock()
 Exporter.init_logging = Mock()
 Exporter.output_path_exists = Mock(return_value=False)
 Exporter.unhide_all_in_document = Mock()
+Exporter.zipfile.ZipFile = MagicMock()
+Exporter.base64.b64decode = Mock()
 
 class RecordSetMtimes:
     def __init__(self):
@@ -134,6 +137,7 @@ ctx = Exporter.Ctx(
     save_sketches=True,
     num_versions=-1,
     export_non_design_files=True,
+    use_active_folder=False,
 )
 file1 = File(
     name='file1',
