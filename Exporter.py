@@ -286,17 +286,17 @@ def visit_sketches(ctx: Ctx, doc: LazyDocument, component):
 
     return counter
 
-def tree_gen(file: adsk.core.DataFile) -> str:
+def tree_gen(file: adsk.core.DataFile) -> Path:
     folders = []
     df = file
     while True:
         if not df.parentFolder:
             break
-        folders.append(df.parentFolder.name)
+        folders.append(sanitize_filename(df.parentFolder.name))
         df = df.parentFolder
 
     folders.reverse()
-    return '\\'.join(folders)
+    return Path(*folders)
 
 def export_filename(ctx: Ctx, file: adsk.core.DataFile, format: Format=None):
     extension = file.fileExtension if format is None else format.value
@@ -502,8 +502,7 @@ def main(ctx: Ctx) -> Counter:
 
     if ctx.use_active_folder:
         root_folder = ctx.app.data.activeFolder
-        tree_buffer = tree_gen(root_folder)
-        new_ctx = ctx.extend(Path(tree_buffer))
+        new_ctx = ctx.extend(tree_gen(root_folder))
         counter += visit_folder(new_ctx, ctx.app.data.activeFolder)
     else:
         for project_id, folder_ids in ctx.projects_folders.items():
