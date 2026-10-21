@@ -31,8 +31,22 @@ class RecordSetMtimes:
     def reset(self):
         self.saves.clear()
 
+class RecordOsRename:
+    def __init__(self):
+        self.renames = []
+
+    def rename(self, src, dst):
+        self.renames.append((src, dst))
+
+    def reset(self):
+        self.renames.clear()
+
 g_record_set_mtimes = RecordSetMtimes()
 Exporter.set_mtime = g_record_set_mtimes.set_mtime
+
+g_record_os_rename = RecordOsRename()
+import os
+os.rename = g_record_os_rename.rename
 
 @property
 def LazyDocument_rootComponent(self):
@@ -168,11 +182,16 @@ folder = Folder(
 
 def run(ctx, folder):
     g_record_set_mtimes.reset()
+    g_record_os_rename.reset()
     counter = Exporter.visit_folder(ctx, folder)
     saves = g_record_set_mtimes.saves
-    return counter, saves
+    renames = g_record_os_rename.renames
+    return counter, saves, renames
 
-counter, saves = run(ctx, folder)
+counter, saves, renames = run(ctx, folder)
 print('counter', counter)
 for file in saves:
     print('saved', file)
+
+for src, dst in renames:
+    print('renamed', src, dst)

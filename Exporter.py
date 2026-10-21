@@ -15,6 +15,7 @@ import os
 from functools import partial
 import zipfile
 import base64
+from contextlib import contextmanager
 
 # If you have a bunch of files already existing and really want the files' date-modified attr
 # to be correct but don't want to rerun an export, you can change this to True for a single run, then
@@ -58,6 +59,16 @@ def load_last_settings():
 def save_last_settings(d):
     with open(last_settings_path, 'w') as fh:
         json.dump(d, fh, indent=2)
+
+@contextmanager
+def atomic_write(dst: Path):
+    tmp = dst.with_name(dst.name + '.tmp')
+    try:
+        yield tmp
+        # note this throws if dst exists, maybe use .move instead?
+        tmp.rename(dst)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 # Having f3d first dictates the order we process calls to export_file, and we want f3d first so that
 # things aren't unhidden when we take the thumbnail
@@ -256,7 +267,8 @@ def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
 
     log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    sketch.saveAsDXF(str(output_path))
+    with atomic_write(output_path) as tmp_path:
+        sketch.saveAsDXF(str(tmp_path))
     set_mtime(output_path, doc.file.dateModified)
     return Counter(saved=1)
 
@@ -303,32 +315,33 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     em = design.exportManager
 
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    output_path_s = str(output_path)
+    with atomic_write(output_path) as tmp_path:
+        output_path_s = str(tmp_path)
 
-    if format == Format.F3D:
-        options = em.createFusionArchiveExportOptions(output_path_s)
-    elif format == Format.STL:
-        options = em.createSTLExportOptions(design.rootComponent, output_path_s)
-    elif format == Format.TMF:
-        options = em.createC3MFExportOptions(design.rootComponent, output_path_s)
-    elif format == Format.STEP:
-        options = em.createSTEPExportOptions(output_path_s)
-    elif format == Format.IGES:
-        options = em.createIGESExportOptions(output_path_s)
-    elif format == Format.SAT:
-        options = em.createSATExportOptions(output_path_s)
-    elif format == Format.SMT:
-        options = em.createSMTExportOptions(output_path_s)
+        if format == Format.F3D:
+            options = em.createFusionArchiveExportOptions(output_path_s)
+        elif format == Format.STL:
+            options = em.createSTLExportOptions(design.rootComponent, output_path_s)
+        elif format == Format.TMF:
+            options = em.createC3MFExportOptions(design.rootComponent, output_path_s)
+        elif format == Format.STEP:
+            options = em.createSTEPExportOptions(output_path_s)
+        elif format == Format.IGES:
+            options = em.createIGESExportOptions(output_path_s)
+        elif format == Format.SAT:
+            options = em.createSATExportOptions(output_path_s)
+        elif format == Format.SMT:
+            options = em.createSMTExportOptions(output_path_s)
 
-    else:
-        raise Exception(f'Got unknown export format {format}')
+        else:
+            raise Exception(f'Got unknown export format {format}')
 
-    # f3d already saves everything that is hidden and for the thumbnail to look nice, we don't want to unhide everything
-    # Note that because unhiding is a mutation, the order of calls to export_file matters, but f3d will be first
-    if ctx.unhide_all and format != Format.F3D:
-        doc.unhide_all()
+        # f3d already saves everything that is hidden and for the thumbnail to look nice, we don't want to unhide everything
+        # Note that because unhiding is a mutation, the order of calls to export_file matters, but f3d will be first
+        if ctx.unhide_all and format != Format.F3D:
+            doc.unhide_all()
 
-    em.execute(options)
+        em.execute(options)
 
     # add a preview thumbnail
     if format == Format.F3D:
@@ -353,11 +366,12 @@ def export_drawing(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     em: adsk.drawing.DrawingExportManager = drawing.exportManager
 
     output_path.parent.mkdir(exist_ok=True, parents=True)
-    output_path_s = str(output_path)
+    with atomic_write(output_path) as tmp_path:
+        output_path_s = str(tmp_path)
 
-    options = em.createPDFExportOptions(output_path_s)
+        options = em.createPDFExportOptions(output_path_s)
 
-    em.execute(options)
+        em.execute(options)
     log(f'PDF created {output_path}')
     set_mtime(output_path, doc.file.dateModified)
     log(f'Saved {output_path}')
@@ -386,7 +400,8 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
 
             output_path.parent.mkdir(exist_ok=True, parents=True)
 
-            file.download(str(output_path), None)  # Synchronous download
+            with atomic_write(output_path) as tmp_path:
+                file.download(str(tmp_path_path), None)  # Synchronous download
 
             set_mtime(output_path, file.dateModified)
             log(f'Saved {output_path}')
