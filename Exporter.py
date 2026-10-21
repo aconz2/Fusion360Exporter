@@ -216,6 +216,8 @@ def unhide_all_in_component(component):
         show(occurrence)
         unhide_all_in_component(occurrence.component)
 
+WINDOWS_RESERVED_NAMES = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}
+
 def sanitize_filename(name: str) -> str:
     """
     Remove "bad" characters from a filename. Right now just punctuation that Windows doesn't like
@@ -225,7 +227,12 @@ def sanitize_filename(name: str) -> str:
     # this list of characters is just from trying to rename a file in Explorer (on Windows)
     # I think the actual requirements are per fileystem and will be different on Mac
     # I'm not sure how other unicode chars are handled
-    with_replacement = re.sub(r'[:\\/*?<>|"]', ' ', name)
+    # control chars aren't allowed either, and Windows drops trailing dots and spaces which could cause collisions
+    with_replacement = re.sub(r'[:\\/*?<>|"\x00-\x1f]', ' ', name).rstrip('. ')
+    # names like CON or `NUL.txt` are reserved devices on Windows, whatever comes after the first dot,
+    # so prefix them rather than relying on the hash suffix below
+    if with_replacement.split('.')[0].strip().upper() in WINDOWS_RESERVED_NAMES:
+        with_replacement = f'_{with_replacement}'
     if name == with_replacement:
         return name
     log(f'filename `{name}` contained bad chars, replacing by `{with_replacement}`')
