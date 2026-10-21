@@ -329,8 +329,6 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
         doc.unhide_all()
 
     em.execute(options)
-    set_mtime(output_path, doc.file.dateModified)
-    log(f'Saved {output_path}')
 
     # add a preview thumbnail
     if format == Format.F3D:
@@ -338,6 +336,9 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
         with zipfile.ZipFile(output_path, 'a') as zf:
             with zf.open('FusionAssetName[Active]/Previews/small.png', 'w') as fh:
                 fh.write(base64.b64decode(thumb_b64))
+
+    set_mtime(output_path, doc.file.dateModified)
+    log(f'Saved {output_path}')
 
     return Counter(saved=1)
 
