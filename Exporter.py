@@ -401,7 +401,7 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
             output_path.parent.mkdir(exist_ok=True, parents=True)
 
             with atomic_write(output_path) as tmp_path:
-                file.download(str(tmp_path_path), None)  # Synchronous download
+                file.download(str(tmp_path), None)  # Synchronous download
 
             set_mtime(output_path, file.dateModified)
             log(f'Saved {output_path}')

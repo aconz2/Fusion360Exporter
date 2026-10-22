@@ -112,6 +112,9 @@ class File:
     def close(self, arg):
         pass
 
+    def download(self, path, sync):
+        pass
+
     @property
     def versions(self):
         return [self.with_version(i) for i in range(self.versionNumber, 0, -1)]
@@ -172,10 +175,17 @@ file1 = File(
         ],
     ),
 )
+file2 = File(
+    name='file2',
+    fileExtension='other',
+    versionNumber=1,
+    rootComponent=None,
+    )
 folder = Folder(
     name='folder1',
     dataFiles=[
         file1,
+        file2,
     ],
     dataFolders=[],
 )
