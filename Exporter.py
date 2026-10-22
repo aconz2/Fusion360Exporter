@@ -549,16 +549,25 @@ def populate_data_projects_list(dropdown, show_folders=False, selected=None):
     if selected is None:
         selected = []
 
+    project_folders_d.clear()
+
+    def add(name, ids):
+        # two projects can have the same name (or `a/b` + `c` vs `a` + `b/c`), number repeats so each maps to its own ids
+        unique = name
+        n = 1
+        while unique in project_folders_d:
+            n += 1
+            unique = f'{name} ({n})'
+        project_folders_d[unique] = ids
+        dropdown.listItems.add(unique, unique in selected)
+
     if show_folders:
         for project in app.data.dataProjects:
             for folder in itertools.chain([project.rootFolder], project.rootFolder.dataFolders):
-                name = f'{project.name}/{folder.name}'
-                project_folders_d[name] = (project.id, folder.id)
-                dropdown.listItems.add(name, name in selected)
+                add(f'{project.name}/{folder.name}', (project.id, folder.id))
     else:
         for project in app.data.dataProjects:
-            project_folders_d[project.name] = (project.id, None)
-            dropdown.listItems.add(project.name, project.name in selected)
+            add(project.name, (project.id, None))
 
 class ExporterCommandInputChangedHandler(adsk.core.InputChangedEventHandler):
     def notify(self, args):
