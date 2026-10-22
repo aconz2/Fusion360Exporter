@@ -2,7 +2,7 @@ This is a Fusion 360 Script to bulk export your files. Can export:
 
 * `f3d` files to `f3d`, `igs`, `stp`, `smt`, `sat`, `3mf` and `stl`
 * `f2d` files to `pdf`
-* can export drawings to `dxf`
+* can export sketches to `dxf`
 
 # Installation
 
@@ -37,7 +37,7 @@ Released versions are tagged with `YYYYMMDD.N` and can be found in the [tags pag
 6) Export Sketches as DXF: Each sketch will get exported as dxf
 7) Versions: Control how many versions are exported. See [Versions](#Versions)
 8) Version Separator Is Space: Controls which character `_` or ` ` (space) is used between the name and version (ie. `name_v42.stl` or `name v42.stl`). Defaults to the original `_` and checking this will use ` ` (space) to better match Fusion.
-9) Export Non-Design Files: If true, all [non-design files](https://help.autodesk.com/view/PLM/ENU/?guid=UG-ATTTAB-ATTACHMENTS) will be exported. Note that only the latest version will be exported and the version number will not be appended.
+9) Export Non-Design Files: If true, all [non-design files](https://help.autodesk.com/view/PLM/ENU/?guid=UG-ATTTAB-ATTACHMENTS) will be exported. They are downloaded as is, follow the same Versions setting as designs, and get the version number appended like other exports.
 
 The last run's settings are loaded by default (if they exist). They are stored next to the `Exporter.py` file on your file system in a file called `last_settings.json`. In "My Scripts", you can right-click "Exporter" and then "Open file location" to get there. If you rename projects or folders you will have to reselect those projects.
 
@@ -53,7 +53,7 @@ If `Download Open Folder` is selected, the files will be saved with all parent f
 
 By default, selecting a project from `Export Projects` will go through every file in every folder recursively.
 
-If you enable `Show Project Folders`, the `Export Projects` dropdown is populated with the top level folders (with an additional `<root>`) of each project. Selecting the `<root>` folder visits files in the project's root folder, but does not recurse. Selecting any other folder will visit all the files in that folder AND recurse into it.
+If you enable `Show Project Folders`, the `Export Projects` dropdown is populated with the top level folders of each project, plus the project's root folder listed first. Selecting the root folder visits files in the project's root folder, but does not recurse. Selecting any other folder will visit all the files in that folder AND recurse into it.
 
 # Versions
 
@@ -81,7 +81,7 @@ Folders' `mtime` are not handled.
 
 # Limitations + Known Issues
 
-1) Not sure what other file types are out there (simulation data maybe? etc) but it only handles `.f3d` documents
+1) Only `.f3d` designs and `.f2d` drawings are exported. Other files (electronics, `.f3z` etc.) are skipped unless Export Non-Design Files is on, in which case they are downloaded as is
 2) Only visible bodies are included in exports to all file formats except `f3d`. Use the "Unhide All" option to unhide them before exporting
 3) Image renders might cause an error. See [#4](https://github.com/aconz2/Fusion360Exporter/issues/4)
 4) Cloud solves might cause an error. See [#3](https://github.com/aconz2/Fusion360Exporter/issues/3)
