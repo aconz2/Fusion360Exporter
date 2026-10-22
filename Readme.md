@@ -92,7 +92,7 @@ To easily run the same settings repeatedly, you can copy-paste the `Template` fo
 
 Note that we store project and folder id's, so renaming a project/folder will not break your backup script. But if you happen to replace the folder with a new one of the same name, it won't work.
 
-You might run into an issue with the `VERSION_SEPARATOR` (whether it is export `file_v42.stl` or `file v42.stl`) if you are using saved settings.
+The version separator (whether it is export `file_v42.stl` or `file v42.stl`) is saved as `version_separator`. Settings from older log files don't have it and default to `_`.
 
 # TODO (Maybe)
 

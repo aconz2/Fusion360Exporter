@@ -10,15 +10,18 @@ data = json.loads(r'''
 {
   "folder": "C:\\...",
   "formats": [
-    "F3D",
-    "STEP"
+    "f3d",
+    "step"
   ],
   "projects_folders": {
     "big long id": ["urn:adsk...."]
   },
+  "use_active_folder": false,
   "unhide_all": true,
   "save_sketches": false,
-  "num_versions": 1
+  "num_versions": 1,
+  "export_non_design_files": false,
+  "version_separator": "_"
 }
 ''')
 
