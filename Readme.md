@@ -38,6 +38,7 @@ Released versions are tagged with `YYYYMMDD.N` and can be found in the [tags pag
 7) Versions: Control how many versions are exported. See [Versions](#Versions)
 8) Version Separator Is Space: Controls which character `_` or ` ` (space) is used between the name and version (ie. `name_v42.stl` or `name v42.stl`). Defaults to the original `_` and checking this will use ` ` (space) to better match Fusion.
 9) Export Non-Design Files: If true, all [non-design files](https://help.autodesk.com/view/PLM/ENU/?guid=UG-ATTTAB-ATTACHMENTS) will be exported. Note that only the latest version will be exported and the version number will not be appended.
+10) Subfolder Per Model: If true, each model's exports (all formats, versions and sketches) are saved in their own folder named after the model, ie. `<export directory>/<project name>/<document name>/<document name><version separator><version name>.<file extension>`. Files already exported without this option are not detected, so toggling it re-exports everything into the new layout.
 
 The last run's settings are loaded by default (if they exist). They are stored next to the `Exporter.py` file on your file system in a file called `last_settings.json`. In "My Scripts", you can right-click "Exporter" and then "Open file location" to get there. If you rename projects or folders you will have to reselect those projects.
 

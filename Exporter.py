@@ -98,6 +98,7 @@ class Ctx(NamedTuple):
     save_sketches: bool
     num_versions: int # -1 means all versions
     export_non_design_files: bool
+    subfolder_per_model: bool = False  # defaulted so settings saved before this option still load
 
     def extend(self, other):
         return self._replace(folder=self.folder / other)
@@ -384,6 +385,10 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
 
     counter = Counter()
 
+    # all versions and formats of a model (and its sketches) go together in <folder>/<model name>/
+    if ctx.subfolder_per_model:
+        ctx = ctx.extend(sanitize_filename(file.name))
+
     if file.fileExtension != 'f3d' and file.fileExtension != 'f2d':
         if not ctx.export_non_design_files:
             log(f'Skipping non-design file {file.name} with extension {file.fileExtension}')
@@ -541,6 +546,7 @@ class I(StrEnum):
     save_sketches = 'save_sketches'
     version_separator_is_space = 'version_separator_is_space'
     export_non_design_files = 'export_non_design_files'
+    subfolder_per_model = 'subfolder_per_model'
 
 def populate_data_projects_list(dropdown, show_folders=False, selected=None):
     app = adsk.core.Application.get()
@@ -635,6 +641,9 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
 
             export_non_design_files = last_settings.get(I.export_non_design_files, False)
             inputs.addBoolValueInput(I.export_non_design_files, 'Export Non-Design Files', True, '', export_non_design_files)
+
+            subfolder_per_model = last_settings.get(I.subfolder_per_model, False)
+            inputs.addBoolValueInput(I.subfolder_per_model, 'Subfolder Per Model', True, '', subfolder_per_model)
         except:
             message_box_traceback()
 
@@ -708,6 +717,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 I.all_versions: iv(I.all_versions),
                 I.version_separator_is_space: iv(I.version_separator_is_space),
                 I.export_non_design_files: iv(I.export_non_design_files),
+                I.subfolder_per_model: iv(I.subfolder_per_model),
             })
 
             # kinda hacky
@@ -725,6 +735,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 save_sketches = iv(I.save_sketches),
                 num_versions = -1 if iv(I.all_versions) else iv(I.version_count),
                 export_non_design_files = iv(I.export_non_design_files),
+                subfolder_per_model = iv(I.subfolder_per_model),
             )
             run_main(ctx)
         except:
