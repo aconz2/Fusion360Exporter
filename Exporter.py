@@ -62,11 +62,12 @@ def save_last_settings(d):
 
 @contextmanager
 def atomic_write(dst: Path):
-    tmp = dst.with_name(dst.name + '.tmp')
+    # keep the real extension last: Fusion's exporters append their own extension
+    # when the path doesn't already end in one (foo.step.tmp -> foo.step.tmp.stp)
+    tmp = dst.with_name(f'{dst.stem}.tmp{dst.suffix}')
     try:
         yield tmp
-        # note this throws if dst exists, maybe use .move instead?
-        tmp.rename(dst)
+        tmp.replace(dst)
     finally:
         tmp.unlink(missing_ok=True)
 
