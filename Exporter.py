@@ -41,8 +41,9 @@ def log(*args):
     log_fh.flush()
 
 def init_directory(name):
-    directory = Path(name)
-    directory.mkdir(exist_ok=True)
+    # parents=True since the default Desktop may not exist (eg when OneDrive redirects it) or the user typed a nested path
+    directory = Path(name).expanduser()
+    directory.mkdir(exist_ok=True, parents=True)
     return directory
 
 def init_logging(directory):
@@ -493,7 +494,7 @@ def visit_folder(ctx: Ctx, folder, recurse=True) -> Counter:
     return counter
 
 def main(ctx: Ctx) -> Counter:
-    init_directory(ctx.folder)
+    ctx = ctx._replace(folder=init_directory(ctx.folder))
     init_logging(ctx.folder)
 
     log(ctx.dumps())
