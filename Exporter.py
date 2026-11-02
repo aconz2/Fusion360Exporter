@@ -1,5 +1,6 @@
 import adsk.core
 import adsk.drawing
+import adsk.fusion
 import traceback
 from pathlib import Path
 from datetime import datetime
@@ -12,10 +13,17 @@ from collections import defaultdict
 import itertools
 import json
 import os
+import time
+import gc
 from functools import partial
 import zipfile
 import base64
 from contextlib import contextmanager
+from uuid import uuid4
+try:
+    from .backup_catalog import BackupCatalog, process_session_id
+except ImportError:
+    from backup_catalog import BackupCatalog, process_session_id
 
 # If you have a bunch of files already existing and really want the files' date-modified attr
 # to be correct but don't want to rerun an export, you can change this to True for a single run, then
@@ -29,6 +37,8 @@ log_file = None
 log_fh = None
 
 handlers = []
+options_closed = False
+pending_export = None
 # map from presentation of `project/folder` shown in UI to (project id, folder id)
 # and also from `project` to (project id, None) if subfolders not enabled
 # this is kinda hacky but not sure how reliable keying on the list item itself is
@@ -37,12 +47,44 @@ project_folders_d = {} # {f'{project.name}/{folder.name}': (project.id, folder.i
 last_settings_path = Path(__file__).parent / 'last_settings.json'
 
 def log(*args):
+    if log_fh is None or log_fh.closed:
+        print(*args)
+        return
     print(*args, file=log_fh)
     log_fh.flush()
 
+def log_ui_resources():
+    """Record Windows UI handle counts to help diagnose long-batch crashes."""
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        user32.GetGuiResources.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        user32.GetGuiResources.restype = wintypes.DWORD
+        process = kernel32.GetCurrentProcess()
+        counts = (user32.GetGuiResources(process, 0), user32.GetGuiResources(process, 1))
+        log(f'UI resources: GDI={counts[0]} USER={counts[1]}')
+        return counts
+    except Exception:
+        # Diagnostics must not prevent an export.
+        log(f'Could not read UI resource counts: {traceback.format_exc()}')
+
+def settle_documents():
+    # Release Python wrappers before giving Fusion a chance to process deferred
+    # document/UI cleanup. Do this between documents, never during an export.
+    gc.collect()
+    adsk.doEvents()
+    time.sleep(0.05)
+    adsk.doEvents()
+    log_ui_resources()
+
 def init_directory(name):
     directory = Path(name)
-    directory.mkdir(exist_ok=True)
+    directory.mkdir(exist_ok=True, parents=True)
     return directory
 
 def init_logging(directory):
@@ -60,13 +102,19 @@ def save_last_settings(d):
     with open(last_settings_path, 'w') as fh:
         json.dump(d, fh, indent=2)
 
+def validate_export_file(path: Path, allow_empty=False):
+    if not path.is_file() or (not allow_empty and path.stat().st_size == 0):
+        raise RuntimeError(f'Export did not produce a valid output file: {path}')
+
 @contextmanager
-def atomic_write(dst: Path):
+def atomic_write(dst: Path, allow_empty=False):
     # keep the real extension last: Fusion's exporters append their own extension
     # when the path doesn't already end in one (foo.step.tmp -> foo.step.tmp.stp)
-    tmp = dst.with_name(f'{dst.stem}.tmp{dst.suffix}')
+    # A fresh name prevents an interrupted run's partial file from being reused.
+    tmp = dst.with_name(f'{dst.stem}.{uuid4().hex}.tmp{dst.suffix}')
     try:
         yield tmp
+        validate_export_file(tmp, allow_empty)
         tmp.replace(dst)
     finally:
         tmp.unlink(missing_ok=True)
@@ -100,6 +148,8 @@ class Ctx(NamedTuple):
     num_versions: int # -1 means all versions
     export_non_design_files: bool
     subfolder_per_model: bool = False  # defaulted so settings saved before this option still load
+    max_documents: int = 450
+    batch: object = None  # runtime state, never serialized
 
     def extend(self, other):
         return self._replace(folder=self.folder / other)
@@ -107,6 +157,7 @@ class Ctx(NamedTuple):
     def to_dict(self):
         d = self._asdict()
         d.pop('app')
+        d.pop('batch')
         d['folder'] = str(d['folder'])
         d['formats'] = [x.value for x in d['formats']]
         d['projects_folders'] = {k: list(v) for k, v in d['projects_folders'].items()}
@@ -117,40 +168,100 @@ class Ctx(NamedTuple):
 
     @classmethod
     def from_dict(cls, d, app):
+        d = dict(d)
         d['app'] = app
         d['folder'] = Path(d['folder'])
         d['formats'] = [FormatFromName[x] for x in d['formats']]
-        d['projects_folders'] = {k: set(v) for k, v in d['projects_folders'].items()}
+        d['projects_folders'] = {k: list(v) for k, v in d['projects_folders'].items()}
         return cls(**d)
 
     def has_show_folders(self):
         return any(len(v) > 0 for v in self.projects_folders.values())
 
+class DocumentCloseError(RuntimeError):
+    """Stop the batch if Fusion cannot release a document."""
+
+class BatchLimitReached(RuntimeError):
+    pass
+
+class BackupBatch:
+    def __init__(self, catalog, limit):
+        self.catalog = catalog
+        self.limit = limit
+        self.session = process_session_id()
+        self.opened = 0
+        self.outputs = []
+
+    def before_open(self):
+        resources = log_ui_resources()
+        if resources and max(resources) >= 7000:
+            raise BatchLimitReached('Fusion UI resource use is high')
+        if not self.catalog.reserve_open(self.session, self.limit):
+            raise BatchLimitReached(f'The limit of {self.limit} document opens in this Fusion session was reached')
+        self.opened += 1
+
+    def record_output(self, path):
+        self.outputs.append(str(path.relative_to(self.catalog.root)))
+
+def record_output(ctx, path):
+    if ctx.batch is not None:
+        ctx.batch.record_output(path)
+
 class LazyDocument:
     def __init__(self, ctx: Ctx, file: adsk.core.DataFile):
         self._ctx = ctx
         self._document = None
+        self._activated = False
         self.file = file
         self.unhidden = False
 
     def open(self):
-        if self._document is not None:
+        if self._document is not None and self._activated:
             return
-        log(f'Opening `{self.file.name}` v{self.file.versionNumber}')
-        self._document = self._ctx.app.documents.open(self.file)
-        self._document.activate()
+        if self._document is None:
+            # Model exports use the document's own design; creating and activating
+            # a UI tab for every version needlessly exercises Fusion's UI. Drawing
+            # PDF export still needs a visible, active drawing.
+            visible = self.file.fileExtension == 'f2d'
+            if self._ctx.batch is not None:
+                self._ctx.batch.before_open()
+            else:
+                log_ui_resources()
+            log(f'Opening `{self.file.name}` v{self.file.versionNumber} (visible={visible})')
+            self._document = self._ctx.app.documents.open(self.file, visible)
+        if self._document is None:
+            raise RuntimeError(f'Fusion could not open `{self.file.name}` v{self.file.versionNumber}')
+        if self.file.fileExtension == 'f2d':
+            log(f'Activating `{self.file.name}` v{self.file.versionNumber}')
+            if not self._document.activate():
+                raise RuntimeError(f'Fusion could not activate `{self.file.name}` v{self.file.versionNumber}')
+        self._activated = True
+        log(f'Opened `{self.file.name}` v{self.file.versionNumber}')
 
     def unhide_all(self):
         if self.unhidden:
             return
+        log(f'Unhiding bodies in `{self.file.name}` v{self.file.versionNumber}')
         unhide_all_in_document(self._document)
         self.unhidden = True
+        log(f'Finished unhiding bodies in `{self.file.name}` v{self.file.versionNumber}')
 
     def close(self):
         if self._document is None:
             return
         log(f'Closing `{self.file.name}` v{self.file.versionNumber}')
-        self._document.close(False)  # don't save changes
+        error = f'Stopping export because `{self.file.name}` v{self.file.versionNumber} could not be closed'
+        try:
+            closed = self._document.close(False)  # don't save changes
+        except Exception as exc:
+            raise DocumentCloseError(error) from exc
+        if not closed:
+            raise DocumentCloseError(error)
+        self._document = None
+        self._activated = False
+        self.unhidden = False
+        log(f'Closed `{self.file.name}` v{self.file.versionNumber}')
+        settle_documents()
 
     @property
     def design(self):
@@ -183,6 +294,17 @@ class Counter:
         self.skipped += other.skipped
         self.errored += other.errored
         return self
+
+@dataclass
+class BackupResult(Counter):
+    total: int = 0
+    completed: int = 0
+    remaining: int = 0
+    failed: int = 0
+    opened: int = 0
+    session_opens: int = 0
+    stop_reason: str = ''
+    catalog_path: str = ''
 
 def design_from_document(document: adsk.core.Document):
     return adsk.fusion.FusionDocument.cast(document).design
@@ -264,13 +386,15 @@ def output_path_exists(path: Path, file: adsk.core.DataFile) -> bool:
 # sketch   : adsk.core.Sketch likewise
 def export_sketch(ctx: Ctx, doc: LazyDocument, component, sketch):
     output_path = ctx.folder / f'{sanitize_filename(sketch.name)}{VERSION_SEPARATOR}v{doc.file.versionNumber}.dxf'
+    record_output(ctx, output_path)
     if output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
     log(f'Exporting sketch {sketch.name} in {component.name} to {output_path}')
     output_path.parent.mkdir(exist_ok=True, parents=True)
     with atomic_write(output_path) as tmp_path:
-        sketch.saveAsDXF(str(tmp_path))
+        if not sketch.saveAsDXF(str(tmp_path)):
+            raise RuntimeError(f'Fusion failed to export sketch `{sketch.name}` to {output_path}')
     set_mtime(output_path, doc.file.dateModified)
     return Counter(saved=1)
 
@@ -300,14 +424,16 @@ def tree_gen(file: adsk.core.DataFile) -> Path:
     folders.reverse()
     return Path(*folders)
 
-def export_filename(ctx: Ctx, file: adsk.core.DataFile, format: Format=None):
+def export_filename(ctx: Ctx, file: adsk.core.DataFile, format: Format=None, separator=None):
     extension = file.fileExtension if format is None else format.value
     sanitized = sanitize_filename(file.name)
-    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{extension}'
+    separator = VERSION_SEPARATOR if separator is None else separator
+    name = f'{sanitized}{separator}v{file.versionNumber}.{extension}'
     return ctx.folder / name
 
 def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     output_path = export_filename(ctx, doc.file, format)
+    record_output(ctx, output_path)
     if output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
@@ -317,6 +443,7 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     em = design.exportManager
 
     output_path.parent.mkdir(exist_ok=True, parents=True)
+    log(f'Exporting {format.value} for `{doc.file.name}` v{doc.file.versionNumber} to {output_path}')
     with atomic_write(output_path) as tmp_path:
         output_path_s = str(tmp_path)
 
@@ -343,14 +470,18 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
         if ctx.unhide_all and format != Format.F3D:
             doc.unhide_all()
 
-        em.execute(options)
+        if not em.execute(options):
+            raise RuntimeError(f'Fusion failed to export {format.value} to {output_path}')
+        validate_export_file(tmp_path)
 
-    # add a preview thumbnail
-    if format == Format.F3D:
-        thumb_b64 = design.rootComponent.createThumbnail(256, 256, 'PNG').getAsBase64String()
-        with zipfile.ZipFile(output_path, 'a') as zf:
-            with zf.open('FusionAssetName[Active]/Previews/small.png', 'w') as fh:
-                fh.write(base64.b64decode(thumb_b64))
+        # Finish the thumbnail before publishing the archive. A crash or exception
+        # here must not leave a final filename that the next run will skip.
+        if format == Format.F3D:
+            log(f'Creating thumbnail for `{doc.file.name}` v{doc.file.versionNumber}')
+            thumb_b64 = design.rootComponent.createThumbnail(256, 256, 'PNG').getAsBase64String()
+            with zipfile.ZipFile(tmp_path, 'a') as zf:
+                with zf.open('FusionAssetName[Active]/Previews/small.png', 'w') as fh:
+                    fh.write(base64.b64decode(thumb_b64))
 
     set_mtime(output_path, doc.file.dateModified)
     log(f'Saved {output_path}')
@@ -359,6 +490,7 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
 
 def export_drawing(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     output_path = export_filename(ctx, doc.file, format)
+    record_output(ctx, output_path)
     if output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
@@ -368,12 +500,14 @@ def export_drawing(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
     em: adsk.drawing.DrawingExportManager = drawing.exportManager
 
     output_path.parent.mkdir(exist_ok=True, parents=True)
+    log(f'Exporting PDF for `{doc.file.name}` v{doc.file.versionNumber} to {output_path}')
     with atomic_write(output_path) as tmp_path:
         output_path_s = str(tmp_path)
 
         options = em.createPDFExportOptions(output_path_s)
 
-        em.execute(options)
+        if not em.execute(options):
+            raise RuntimeError(f'Fusion failed to export PDF to {output_path}')
     log(f'PDF created {output_path}')
     set_mtime(output_path, doc.file.dateModified)
     log(f'Saved {output_path}')
@@ -400,14 +534,16 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
 
         try:
             output_path = export_filename(ctx, file)
+            record_output(ctx, output_path)
             if output_path_exists(output_path, file):
                 counter.skipped += 1
                 return counter
 
             output_path.parent.mkdir(exist_ok=True, parents=True)
 
-            with atomic_write(output_path) as tmp_path:
-                file.download(str(tmp_path), None)  # Synchronous download
+            with atomic_write(output_path, allow_empty=True) as tmp_path:
+                if not file.download(str(tmp_path), None):  # Synchronous download
+                    raise RuntimeError(f'Fusion failed to download {output_path}')
 
             set_mtime(output_path, file.dateModified)
             log(f'Saved {output_path}')
@@ -428,6 +564,8 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
         if file.fileExtension == 'f2d' and Format.PDF in ctx.formats:
             try:
                 counter += export_drawing(ctx, Format.PDF, doc)
+            except BatchLimitReached:
+                raise
             except Exception:
                 counter.errored += 1
                 log(traceback.format_exc())
@@ -438,6 +576,8 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
                     continue
                 try:
                     counter += export_file(ctx, format, doc)
+                except BatchLimitReached:
+                    raise
                 except Exception:
                     counter.errored += 1
                     log(traceback.format_exc())
@@ -488,6 +628,8 @@ def visit_folder(ctx: Ctx, folder, recurse=True) -> Counter:
         try:
             for file_version in file_versions(file, ctx.num_versions):
                 counter += visit_file(new_ctx, file_version)
+        except (DocumentCloseError, BatchLimitReached):
+            raise
         except Exception:
             log(f'Got exception visiting file\n{traceback.format_exc()}')
             counter.errored += 1
@@ -498,38 +640,156 @@ def visit_folder(ctx: Ctx, folder, recurse=True) -> Counter:
 
     return counter
 
-def main(ctx: Ctx) -> Counter:
-    init_directory(ctx.folder)
-    init_logging(ctx.folder)
-
-    log(ctx.dumps())
-
-    counter = Counter()
-
+def selected_folders(ctx):
     if ctx.use_active_folder:
         root_folder = ctx.app.data.activeFolder
+        if root_folder is None:
+            raise RuntimeError('No folder is open in the Data Panel')
         new_ctx = ctx.extend(tree_gen(root_folder))
-        counter += visit_folder(new_ctx, ctx.app.data.activeFolder)
+        yield new_ctx, root_folder, True
     else:
         for project_id, folder_ids in ctx.projects_folders.items():
             project = ctx.app.data.dataProjects.itemById(project_id)
-
-            if folder_ids == []:  # empty filter visit everything
-                counter += visit_folder(ctx, project.rootFolder)
-
-            # if the root folder is the only thing selected, we take that to mean no recurse
-            elif folder_ids == [project.rootFolder.id]:
-                counter += visit_folder(ctx, project.rootFolder, recurse=False)
-
+            if project is None:
+                raise RuntimeError(f'Selected project is no longer available: {project_id}')
+            if not folder_ids:  # empty filter visits everything, including saved settings
+                yield ctx, project.rootFolder, True
             else:
-                folders = project.rootFolder.dataFolders
-                # hmm this doesn't work, the itemsById doesn't return the folder
-                # for folder_id in folder_ids:
-                #     counter += visit_folder(ctx, folders.itemById(folder_id))
-                for folder in filter(lambda x: x.id in folder_ids, folders):
-                    counter += visit_folder(ctx, folder)
+                if project.rootFolder.id in folder_ids:
+                    yield ctx, project.rootFolder, False
+                for folder in project.rootFolder.dataFolders:
+                    if folder.id in folder_ids:
+                        yield ctx, folder, True
 
-    return counter
+def catalog_folder(ctx, folder, root, separator, recurse=True):
+    """Discover metadata and expected outputs without opening any documents."""
+    ctx = ctx.extend(sanitize_filename(folder.name))
+    log(f'Cataloging folder {folder.name}')
+    for file in folder.dataFiles:
+        try:
+            extension = file.fileExtension
+            if extension == 'f3d':
+                formats = [f for f in ctx.formats if f != Format.PDF]
+                sketches = ctx.save_sketches
+            elif extension == 'f2d':
+                formats = [Format.PDF] if Format.PDF in ctx.formats else []
+                sketches = False
+            elif ctx.export_non_design_files:
+                formats, sketches = [None], False
+            else:
+                continue
+            if not formats and not sketches:
+                continue
+            versions = file_versions(file, ctx.num_versions) if extension in ('f3d', 'f2d') else [file]
+            for version in versions:
+                output_ctx = ctx.extend(sanitize_filename(version.name)) if ctx.subfolder_per_model else ctx
+                yield {
+                    'file_id': version.id, 'version_id': version.versionId,
+                    'name': version.name, 'version': version.versionNumber,
+                    'extension': version.fileExtension, 'modified': version.dateModified,
+                    'folder': str(ctx.folder.relative_to(root)),
+                    'formats': [f.value for f in formats if f is not None],
+                    'sketches': sketches, 'unhide_all': ctx.unhide_all,
+                    'subfolder_per_model': ctx.subfolder_per_model, 'separator': separator,
+                    'expected_outputs': [str(export_filename(output_ctx, version, f, separator).relative_to(root))
+                                         for f in formats],
+                }
+        except Exception:
+            log(f'Could not catalog {file.name}:\n{traceback.format_exc()}')
+            yield None
+    if recurse:
+        for subfolder in folder.dataFolders:
+            yield from catalog_folder(ctx, subfolder, root, separator)
+
+def queue_options(ctx, separator):
+    options = ctx.to_dict()
+    options.pop('max_documents')
+    options['folder'] = str(ctx.folder.resolve())
+    options['separator'] = separator
+    options['projects_folders'] = {k: sorted(v) for k, v in options['projects_folders'].items()}
+    if ctx.use_active_folder:
+        folder = ctx.app.data.activeFolder
+        options['active_folder_id'] = folder.id if folder is not None else None
+    return options
+
+def catalog_inventory(ctx, catalog, separator):
+    scan = uuid4().hex
+    errors = 0
+    with catalog.scan():
+        position = 0
+        for folder_ctx, folder, recurse in selected_folders(ctx):
+            for payload in catalog_folder(folder_ctx, folder, ctx.folder, separator, recurse=recurse):
+                if payload is None:
+                    errors += 1
+                    continue
+                catalog.discover(payload, scan, position)
+                position += 1
+        catalog.save_scan(scan, queue_options(ctx, separator), errors)
+    return scan, errors
+
+def run_catalog(ctx, catalog, scan, scan_errors=0):
+    batch = BackupBatch(catalog, ctx.max_documents)
+    result = BackupResult(errored=scan_errors, catalog_path=str(catalog.path))
+    result.skipped = catalog.completed_outputs(scan)
+    for job in catalog.queue(scan):
+        payload, key = job['payload'], job['key']
+        batch.outputs = list(payload['expected_outputs'])
+        catalog.start(key)
+        try:
+            file = ctx.app.data.findFileById(payload['version_id'])
+            if file is None or file.id != payload['file_id'] or file.versionNumber != payload['version']:
+                raise RuntimeError(f'Could not resolve exact version {payload["version_id"]}')
+            if file.name != payload['name'] or file.fileExtension != payload['extension']:
+                raise RuntimeError('The cloud file changed during cataloging; refresh the queue')
+            job_ctx = ctx._replace(folder=ctx.folder / payload['folder'], batch=batch)
+            count = visit_file(job_ctx, file)
+            result += count
+            if count.errored:
+                catalog.fail(key, f'{count.errored} export errors; see {log_file}')
+            elif not catalog.outputs_present(payload, batch.outputs):
+                raise RuntimeError('Some cataloged output files are missing after export')
+            else:
+                # Includes the sketch paths discovered during this job. A zero-
+                # sketch document is complete too, so it need not be reopened.
+                catalog.finish(key, batch.outputs)
+        except BatchLimitReached as exc:
+            catalog.defer(key)
+            result.stop_reason = str(exc)
+            break
+        except DocumentCloseError as exc:
+            catalog.fail(key, str(exc))
+            result.errored += 1
+            result.stop_reason = str(exc)
+            log(traceback.format_exc())
+            break
+        except Exception:
+            error = traceback.format_exc()
+            catalog.fail(key, error)
+            result.errored += 1
+            log(error)
+    counts = catalog.counts(scan)
+    result.total = counts['total']
+    result.completed = counts['done']
+    result.remaining = counts['total'] - counts['done']
+    result.failed = counts['error']
+    result.opened = batch.opened
+    result.session_opens = catalog.session_opens(batch.session)
+    return result
+
+def main(ctx: Ctx) -> BackupResult:
+    ctx = ctx._replace(folder=ctx.folder.resolve())
+    if ctx.max_documents < 1:
+        raise ValueError('The document limit must be at least 1')
+    init_directory(ctx.folder)
+    init_logging(ctx.folder)
+    log(ctx.dumps())
+    with BackupCatalog(ctx.folder) as catalog:
+        log(f'Cataloging the selected files before exporting. Progress database: {catalog.path}')
+        scan, errors = catalog_inventory(ctx, catalog, VERSION_SEPARATOR)
+        counts = catalog.counts(scan)
+        log(f'Queue: {counts["total"]} document versions, {counts["done"]} complete, '
+            f'{counts["total"] - counts["done"]} remaining')
+        return run_catalog(ctx, catalog, scan, errors)
 
 def message_box_traceback():
     adsk.core.Application.get().userInterface.messageBox(traceback.format_exc())
@@ -548,6 +808,48 @@ class I(StrEnum):
     version_separator_is_space = 'version_separator_is_space'
     export_non_design_files = 'export_non_design_files'
     subfolder_per_model = 'subfolder_per_model'
+    max_documents = 'max_documents'
+    queue_status = 'queue_status'
+    refresh_queue = 'refresh_queue'
+
+def context_from_inputs(inputs):
+    iv = partial(input_value, inputs)
+    return Ctx(
+        app=adsk.core.Application.get(), folder=Path(iv(I.directory)).resolve(),
+        formats=[FormatFromName[x] for x in input_selected(inputs, I.file_types)],
+        use_active_folder=iv(I.use_active_folder), projects_folders=make_projects_folders(inputs),
+        unhide_all=iv(I.unhide_all), save_sketches=iv(I.save_sketches),
+        num_versions=-1 if iv(I.all_versions) else iv(I.version_count),
+        export_non_design_files=iv(I.export_non_design_files),
+        subfolder_per_model=iv(I.subfolder_per_model), max_documents=iv(I.max_documents),
+    )
+
+def update_queue_display(inputs, refresh=False):
+    status = inputs.itemById(I.queue_status)
+    ctx = context_from_inputs(inputs)
+    separator = ' ' if input_value(inputs, I.version_separator_is_space) else '_'
+    path = ctx.folder / '.fusion-exporter.sqlite3'
+    if not refresh and not path.is_file():
+        status.text = 'Queue not cataloged. Click Refresh Queue to count the selected document versions.'
+        return
+    if refresh:
+        init_directory(ctx.folder)
+    with BackupCatalog(ctx.folder) as catalog:
+        if refresh:
+            scan, errors = catalog_inventory(ctx, catalog, separator)
+            counts = catalog.counts(scan)
+            counts['scan_errors'] = errors
+        else:
+            counts = catalog.preview(queue_options(ctx, separator))
+        if counts is None:
+            status.text = 'Options changed. Click Refresh Queue to update the count.'
+            return
+        remaining = counts['total'] - counts['done']
+        session_opens = catalog.session_opens(process_session_id())
+        status.text = (f'{counts["total"]} total | {counts["done"]} completed | {remaining} remaining\n'
+                       f'{counts["error"]} failed | {session_opens}/{ctx.max_documents} document opens this Fusion session')
+        if counts['scan_errors']:
+            status.text += f'\nQueue incomplete: {counts["scan_errors"]} cataloging errors.'
 
 def populate_data_projects_list(dropdown, show_folders=False, selected=None):
     app = adsk.core.Application.get()
@@ -571,6 +873,13 @@ class ExporterCommandInputChangedHandler(adsk.core.InputChangedEventHandler):
     def notify(self, args):
          try:
             inputs = args.inputs
+            if inputs.itemById(I.queue_status) is None:
+                return  # The command dialog is still being built.
+            if args.input.id == I.refresh_queue:
+                if args.input.value:
+                    args.input.value = False
+                    update_queue_display(inputs, refresh=True)
+                return
             if args.input.id == I.all_versions:
                 inputs.itemById(I.version_count).isEnabled = not args.input.value
             elif args.input.id == I.use_active_folder:
@@ -578,6 +887,8 @@ class ExporterCommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 inputs.itemById(I.show_folders).isEnabled = not args.input.value
             elif args.input.id == I.show_folders:
                 populate_data_projects_list(inputs.itemById(I.projects), args.input.value)
+            if args.input.id not in (I.queue_status, I.refresh_queue):
+                update_queue_display(inputs)
 
          except:
             message_box_traceback()
@@ -645,15 +956,26 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
 
             subfolder_per_model = last_settings.get(I.subfolder_per_model, False)
             inputs.addBoolValueInput(I.subfolder_per_model, 'Subfolder Per Model', True, '', subfolder_per_model)
+
+            max_documents = last_settings.get(I.max_documents, 450)
+            inputs.addIntegerSpinnerCommandInput(I.max_documents, 'Max Documents Per Fusion Session', 1, 10000, 1, max_documents)
+            inputs.addTextBoxCommandInput(I.queue_status, 'Backup Queue (document versions)', '', 3, True)
+            inputs.addBoolValueInput(I.refresh_queue, 'Refresh Queue', False, '', False)
+            update_queue_display(inputs)
         except:
             message_box_traceback()
 
+def finish_script():
+    global pending_export
+    pending_export = None
+    adsk.terminate()
+
 class ExporterCommandDestroyHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
-        try:
-            adsk.terminate()
-        except:
-            message_box_traceback()
+        global options_closed
+        # Let the script's run function resume after this callback has returned.
+        # Neither export nor script termination belongs in this command event.
+        options_closed = True
 
 # Dont use yield and don't copy list items, swig wants to delete things
 def selected(inputs):
@@ -671,27 +993,42 @@ def make_projects_folders(inputs):
     return ret
 
 def run_main(ctx):
+    global log_fh, log_file
+    log_fh = None
+    log_file = None
     try:
         app = adsk.core.Application.get()
         ui = app.userInterface
         counter = main(ctx)
+        if not counter.remaining and not counter.errored:
+            outcome = 'Backup complete.'
+        elif counter.stop_reason:
+            outcome = f'Paused: {counter.stop_reason}.\nRestart Fusion and run Exporter again to continue.'
+        else:
+            outcome = 'The run ended with unfinished work. Failed items remain queued.'
         summary = '\n'.join((
+            'Run finished.', outcome,
             f'Saved {counter.saved} files',
             f'Skipped {counter.skipped} files',
             f'Encountered {counter.errored} errors',
+            f'Queue: {counter.completed}/{counter.total} completed; {counter.remaining} remaining ({counter.failed} failed)',
+            f'Document opens: {counter.opened} this run; {counter.session_opens}/{ctx.max_documents} this Fusion session',
+            f'Backup catalog: {counter.catalog_path}',
             f'Log file is at {log_file}'
         ))
         log(summary)
-        ui.messageBox(summary)
+        ui.messageBox(summary, 'Exporter — Run finished')
 
     except:
         tb = traceback.format_exc()
-        adsk.core.Application.get().userInterface.messageBox(f'Log file is at {log_file}\n{tb}')
+        adsk.core.Application.get().userInterface.messageBox(
+            f'Run finished with an error.\nLog file is at {log_file}\n{tb}', 'Exporter — Run finished')
         if log_fh is not None:
             log(f'Got top level exception\n{tb}')
     finally:
         if log_fh is not None:
             log_fh.close()
+            log_fh = None
 
 def input_value(inputs, name):
     return inputs.itemById(name).value
@@ -701,6 +1038,8 @@ def input_selected(inputs, name):
 
 class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
+        global VERSION_SEPARATOR, pending_export
+        pending_export = None
         try:
             inputs = args.command.commandInputs
             iv = partial(input_value, inputs)
@@ -719,35 +1058,27 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 I.version_separator_is_space: iv(I.version_separator_is_space),
                 I.export_non_design_files: iv(I.export_non_design_files),
                 I.subfolder_per_model: iv(I.subfolder_per_model),
+                I.max_documents: iv(I.max_documents),
             })
 
-            # kinda hacky
-            if iv(I.version_separator_is_space):
-                global VERSION_SEPARATOR
-                VERSION_SEPARATOR = ' '
+            VERSION_SEPARATOR = ' ' if iv(I.version_separator_is_space) else '_'
 
-            ctx = Ctx(
-                app = adsk.core.Application.get(),
-                folder = Path(iv(I.directory)),
-                formats = [FormatFromName[x] for x in isel(I.file_types)],
-                use_active_folder = iv(I.use_active_folder),
-                projects_folders = make_projects_folders(inputs),
-                unhide_all = iv(I.unhide_all),
-                save_sketches = iv(I.save_sketches),
-                num_versions = -1 if iv(I.all_versions) else iv(I.version_count),
-                export_non_design_files = iv(I.export_non_design_files),
-                subfolder_per_model = iv(I.subfolder_per_model),
-            )
-            run_main(ctx)
+            ctx = context_from_inputs(inputs)
+            # Only collect settings here. Opening/closing documents inside a
+            # command event is unsupported; run resumes after destroy returns.
+            pending_export = ctx
         except:
             message_box_traceback()
 
 def run(context):
+    global options_closed, pending_export
     ui = None
     try:
         app = adsk.core.Application.get()
         ui = app.userInterface
         cmd_defs = ui.commandDefinitions
+        pending_export = None
+        options_closed = False
 
         CMD_DEF_ID = 'aconz2_Exporter'
         cmd_def = cmd_defs.itemById(CMD_DEF_ID)
@@ -766,9 +1097,26 @@ def run(context):
         cmd_def.commandCreated.add(cmd_created)
         handlers.append(cmd_created)
 
-        cmd_def.execute()
-
         adsk.autoTerminate(False)
+        if not cmd_def.execute():
+            raise RuntimeError('Could not open the export options command')
+
+        # Pump events only while the options dialog is open. After doEvents
+        # returns, destroy and the command's transaction teardown have unwound.
+        # The batch itself runs normally on the main thread, outside callbacks.
+        while not options_closed:
+            adsk.doEvents()
+            if not options_closed:
+                time.sleep(0.01)
+
+        ctx = pending_export
+        pending_export = None
+        if ctx is not None:
+            if ui.activeCommand != 'SelectCommand':
+                ui.commandDefinitions.itemById('SelectCommand').execute()
+            run_main(ctx)
     except:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+    finally:
+        finish_script()

@@ -24,7 +24,7 @@ Released versions are tagged with `YYYYMMDD.N` and can be found in the [tags pag
 1) Goto Scripts and Add-Ins
 2) Select Exporter from "My Scripts"
 3) Hit Run. It will take a second to display the options panel as it is fetching your list of projects.
-4) After selecting your options and hitting okay, **your computer will be unusable**. The script will be potentially opening and exporting a lot of documents and each time it opens one, Fusion likes to make itself the active window which means you can't just have this run in the background (as far as I know).
+4) Select your options and hit okay. Models are opened in the background without activating a document tab. Fusion still does the export work on its main thread, so it may be unresponsive during individual operations. Drawing PDF exports open and activate the drawing.
 
 # Options
 
@@ -39,6 +39,8 @@ Released versions are tagged with `YYYYMMDD.N` and can be found in the [tags pag
 8) Version Separator Is Space: Controls which character `_` or ` ` (space) is used between the name and version (ie. `name_v42.stl` or `name v42.stl`). Defaults to the original `_` and checking this will use ` ` (space) to better match Fusion.
 9) Export Non-Design Files: If true, all [non-design files](https://help.autodesk.com/view/PLM/ENU/?guid=UG-ATTTAB-ATTACHMENTS) will be exported. Note that only the latest version will be exported and the version number will not be appended.
 10) Subfolder Per Model: If true, each model's exports (all formats, versions and sketches) are saved in their own folder named after the model, ie. `<export directory>/<project name>/<document name>/<document name><version separator><version name>.<file extension>`. Files already exported without this option are not detected, so toggling it re-exports everything into the new layout.
+11) Max Documents Per Fusion Session: Defaults to **450** document opens. Each saved version counts separately. The allowance persists across script invocations in the same Fusion process. After reaching it, restart Fusion and run Exporter again to continue the queue. The exporter can also pause earlier if Windows UI resource use is high.
+12) Backup Queue: Shows total, completed, remaining, and failed document versions, plus this Fusion session's document-open count. Click **Refresh Queue** to catalog the current selection without opening models. Changing backup options requires refreshing the count.
 
 The last run's settings are loaded by default (if they exist). They are stored next to the `Exporter.py` file on your file system in a file called `last_settings.json`. In "My Scripts", you can right-click "Exporter" and then "Open file location" to get there. If you rename projects or folders you will have to reselect those projects.
 
@@ -70,9 +72,19 @@ For sketches, it will create a folder hiearchy like `<export directory>/<project
 
 Since document names might have invalid filename characters, we attempt to replace them with spaces. In order to avoid a false collision, if any chars are replaced, the document name will have 8 hexchars of sha256 hash of the original utf-8 encoded document name. Eg `model 1/2 \ * ? <morechars> ||` would be saved as `model 1 2        morechars    _29a6fecc_v1.f3d`
 
-In some ways this is an export and in others, it is more of a sync, since it won't re-export files that already exist and it skips opening documents it doesn't need to (with the caveat being we always have to open every document when exporting sketches).
+The exporter catalogs selected files and versions before exporting, and stores the inventory and progress in `.fusion-exporter.sqlite3` in the export directory. Each document version is marked complete only after its selected exports and sketches succeed and its document closes. Completed documents are skipped without reopening them, including when exporting sketches. Missing outputs put the document back in the queue. Existing model exports from earlier runs are recognized; sketches need one successful cataloged run to record their complete list.
+
+Every invocation refreshes the selected inventory to discover new files and versions. Completed work is retained when switching between latest-only and all-version backups. Failed and interrupted documents remain queued, with untouched pending work processed first. A crash can leave the current document unfinished; its already saved output files are skipped when it is retried.
+
+Each run ends with a **Run finished** popup showing saved files, queue progress, and the reason for stopping. A limit stop says **Paused** and reports the remaining work. **Backup complete** appears only when every queued document version is complete and there were no cataloging or export errors. Canceling the options dialog does not start a run.
 
 It will create a log file at `<export_directory>/<timestamp>.txt` that should have some more info if things go wrong.
+
+The script processes Fusion events while the options dialog is open, then starts the batch after the options command finishes. Export work runs on Fusion's main thread outside the command callbacks, so document opening and closing happen outside the command transaction.
+
+Models open with `visible=False` to reduce UI work during large exports. After each document closes, the script releases Python wrappers and processes Fusion events to allow deferred cleanup before opening the next document. On Windows, the log also records GDI and USER handle counts to help diagnose UI resource accumulation.
+
+Exports use unique temporary filenames and are published to their final names only after the export succeeds and the output exists. F3D thumbnail updates are completed before publishing the archive. Failed exports are logged and can be retried; a failure to close a document stops the batch to avoid accumulating open documents. Logs record document opening, activation, export, thumbnail creation, and closure stages.
 
 # File Time
 
@@ -112,6 +124,8 @@ You might run into an issue with the `VERSION_SEPARATOR` (whether it is export `
 * Figured out f3d thumbnails with Happy1Snappy
 
 # Dev
+
+Run `python -B -m unittest -v test` for regression tests. The tests use temporary files and a stub Fusion API; they do not exercise Fusion's native code.
 
 Discussion about some changes are in issue [23](https://github.com/aconz2/Fusion360Exporter/issues/23) on folder output structure. I implemented most of those ideas in the `dev` branch some time ago -- including a way to write tests -- but never felt like it was a great change so it is abandoned.
 
