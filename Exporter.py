@@ -1,5 +1,6 @@
 import adsk.core
 import adsk.drawing
+import adsk.fusion
 import traceback
 from pathlib import Path
 from datetime import datetime
