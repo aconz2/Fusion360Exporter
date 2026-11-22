@@ -119,6 +119,7 @@ class Ctx(NamedTuple):
     num_versions: int # -1 means all versions
     export_non_design_files: bool
     subfolder_per_model: bool = False  # defaulted so settings saved before this option still load
+    save_mesh_bodies: bool = False  # defaulted so settings saved before this option still load
 
     def extend(self, other):
         return self._replace(folder=self.folder / other)
@@ -335,6 +336,78 @@ def visit_sketches(ctx: Ctx, doc: LazyDocument, component):
 
     return counter
 
+
+def _write_mesh_body_as_stl(mesh_body, path: Path):
+    """Write a MeshBody to a binary STL file.
+
+    createSTLExportOptions does not accept a MeshBody as the export entity
+    (it silently produces no file), so we write the STL directly from the
+    mesh geometry.  mesh_body.mesh returns a PolygonMesh whose properties
+    are nodeCoordinates (list of Point3D) and triangleNodeIndices (flat
+    list of vertex indices, 3 per triangle).
+    """
+    import struct
+    mesh = mesh_body.mesh  # adsk.fusion.PolygonMesh
+
+    # Grab each property once: Fusion rebuilds the Python list on every access
+    coords = mesh.nodeCoordinates          # iterable of Point3D (internal units = cm)
+    tri_idx = mesh.triangleNodeIndices     # flat list, 3 ints per triangle
+
+    # Fusion's internal unit is cm; STL has no unit metadata and the de-facto
+    # convention (FreeCAD, PrusaSlicer, etc.) is mm, so scale by 10.
+    CM_TO_MM = 10.0
+    verts = [(c.x * CM_TO_MM, c.y * CM_TO_MM, c.z * CM_TO_MM) for c in coords]
+    tri_count = len(tri_idx) // 3
+
+    with open(path, 'wb') as f:
+        f.write(b'\x00' * 80)                          # 80-byte header
+        f.write(struct.pack('<I', tri_count))           # triangle count (uint32 LE)
+        for i in range(tri_count):
+            i1 = tri_idx[i * 3]
+            i2 = tri_idx[i * 3 + 1]
+            i3 = tri_idx[i * 3 + 2]
+            p1, p2, p3 = verts[i1], verts[i2], verts[i3]
+            # Face normal via cross product of two edges
+            ux, uy, uz = p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]
+            vx, vy, vz = p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]
+            nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+            nlen = (nx * nx + ny * ny + nz * nz) ** 0.5
+            if nlen > 1e-12:
+                nx, ny, nz = nx / nlen, ny / nlen, nz / nlen
+            f.write(struct.pack('<3f', nx, ny, nz))    # normal
+            f.write(struct.pack('<3f', *p1))            # vertex 1
+            f.write(struct.pack('<3f', *p2))            # vertex 2
+            f.write(struct.pack('<3f', *p3))            # vertex 3
+            f.write(struct.pack('<H', 0))               # attribute byte count
+
+
+def export_mesh_body(ctx: Ctx, doc: LazyDocument, component, mesh_body):
+    output_path = ctx.folder / f'{sanitize_filename(mesh_body.name)}{VERSION_SEPARATOR}v{doc.file.versionNumber}.stl'
+    if output_path_exists(output_path, doc.file):
+        return Counter(skipped=1)
+
+    log(f'Exporting mesh body {mesh_body.name} in {component.name} to {output_path}')
+    output_path.parent.mkdir(exist_ok=True, parents=True)
+    with atomic_write(output_path) as tmp_path:
+        _write_mesh_body_as_stl(mesh_body, tmp_path)
+    set_mtime(output_path, doc.file.dateModified)
+    return Counter(saved=1)
+
+
+def visit_mesh_bodies(ctx: Ctx, doc: LazyDocument, component):
+    counter = Counter()
+    for mesh_body in component.meshBodies:
+        try:
+            counter += export_mesh_body(ctx, doc, component, mesh_body)
+        except Exception:
+            log(traceback.format_exc())
+            counter.errored += 1
+
+    for occurrence in component.occurrences:
+        counter += visit_mesh_bodies(ctx.extend(sanitize_filename(occurrence.name)), doc, occurrence.component)
+
+    return counter
+
 def tree_gen(file: adsk.core.DataFile) -> Path:
     folders = []
     df = file
@@ -471,6 +544,10 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
         if ctx.save_sketches and file.fileExtension != 'f2d':
             doc.open()
             counter += visit_sketches(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc, doc.rootComponent)
+
+        if ctx.save_mesh_bodies and file.fileExtension != 'f2d':
+            doc.open()
+            counter += visit_mesh_bodies(ctx.extend(sanitize_filename(doc.rootComponent.name)), doc, doc.rootComponent)
 
         if file.fileExtension == 'f2d' and Format.PDF in ctx.formats:
             try:
@@ -615,6 +692,7 @@ class I(StrEnum):
     version_count = 'version_count'
     all_versions = 'all_versions'
     save_sketches = 'save_sketches'
+    save_mesh_bodies = 'save_mesh_bodies'
     version_separator_is_space = 'version_separator_is_space'
     export_non_design_files = 'export_non_design_files'
     subfolder_per_model = 'subfolder_per_model'
@@ -712,6 +790,9 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             save_sketches = last_settings.get(I.save_sketches, False)
             inputs.addBoolValueInput(I.save_sketches, 'Save Sketches as DXF', True, '', save_sketches)
 
+            save_mesh_bodies = last_settings.get(I.save_mesh_bodies, False)
+            inputs.addBoolValueInput(I.save_mesh_bodies, 'Save Mesh Bodies as STL', True, '', save_mesh_bodies)
+
             version_separator_is_space = last_settings.get(I.version_separator_is_space, VERSION_SEPARATOR == ' ')
             inputs.addBoolValueInput(I.version_separator_is_space, 'Version Separator is Space', True, '', version_separator_is_space)
 
@@ -793,6 +874,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 I.projects: isel(I.projects),
                 I.unhide_all: unhide_all_value,
                 I.save_sketches: iv(I.save_sketches),
+                I.save_mesh_bodies: iv(I.save_mesh_bodies),
                 I.version_count: iv(I.version_count),
                 I.all_versions: iv(I.all_versions),
                 I.version_separator_is_space: iv(I.version_separator_is_space),
@@ -813,6 +895,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 projects_folders = make_projects_folders(inputs),
                 unhide_all = UnhideAllFromName[unhide_all_value],
                 save_sketches = iv(I.save_sketches),
+                save_mesh_bodies = iv(I.save_mesh_bodies),
                 num_versions = -1 if iv(I.all_versions) else iv(I.version_count),
                 export_non_design_files = iv(I.export_non_design_files),
                 subfolder_per_model = iv(I.subfolder_per_model),
