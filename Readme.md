@@ -33,7 +33,10 @@ Released versions are tagged with `YYYYMMDD.N` and can be found in the [tags pag
 3) Download Open Folder: Uses the current folder in the Data Panel as the starting folder to initiate an export. See [Projects/Folders](#ProjectsFolders)
 4) Projects: Select the projects (or folders) you want to operate on
     * Show Project Folders: Instead of selecting whole projects, you can select specific folders. See [Projects/Folders](#ProjectsFolders)
-5) Unhide All: When checked, it will unhide all components and all bodies (recursively) so that the exported files contain all bodies
+5) Unhide All Bodies: Controls whether hidden components/bodies are made visible before exporting (they are excluded from every format except `f3d` otherwise):
+    * Do not unhide: export only what is visible
+    * Unhide all bodies in the export: unhide all components and all bodies (recursively) so the single exported file contains all bodies
+    * Also save a separate export with all bodies unhidden: exports each non-`f3d` format twice, once as-is (`model_v3.stp`) and once with all bodies unhidden (`model_v3_all_bodies.stp`)
 6) Export Sketches as DXF: Each sketch will get exported as dxf
 7) Versions: Control how many versions are exported. See [Versions](#Versions)
 8) Version Separator Is Space: Controls which character `_` or ` ` (space) is used between the name and version (ie. `name_v42.stl` or `name v42.stl`). Defaults to the original `_` and checking this will use ` ` (space) to better match Fusion.
@@ -83,7 +86,7 @@ Folders' `mtime` are not handled.
 # Limitations + Known Issues
 
 1) Not sure what other file types are out there (simulation data maybe? etc) but it only handles `.f3d` documents
-2) Only visible bodies are included in exports to all file formats except `f3d`. Use the "Unhide All" option to unhide them before exporting
+2) Only visible bodies are included in exports to all file formats except `f3d`. Use the "Unhide All Bodies" option to unhide them before exporting, or to save an additional export with them unhidden
 3) Image renders might cause an error. See [#4](https://github.com/aconz2/Fusion360Exporter/issues/4)
 4) Cloud solves might cause an error. See [#3](https://github.com/aconz2/Fusion360Exporter/issues/3)
 
