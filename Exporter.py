@@ -102,7 +102,7 @@ UNHIDDEN_EXPORT_SUFFIX = '_all_bodies'
 UNHIDE_ALL_CHOICES = [
     (UnhideAll.NO, 'Do not unhide'),
     (UnhideAll.YES, 'Unhide all bodies in the export'),
-    (UnhideAll.BOTH, 'Also save a separate export with all bodies unhidden'),
+    (UnhideAll.BOTH, 'Also save a separate export with all bodies unhidden (if any are hidden)'),
 ]
 UNHIDE_ALL_LABEL_TO_VALUE = {label: mode.value for mode, label in UNHIDE_ALL_CHOICES}
 
@@ -242,6 +242,28 @@ def unhide_all_in_component(component):
     for occurrence in component.occurrences:
         show(occurrence)
         unhide_all_in_component(occurrence.component)
+
+def is_hidden(item, attr='isLightBulbOn') -> bool:
+    try:
+        return not getattr(item, attr)
+    except Exception:
+        # if the state can't be read (eg externally referenced components), assume hidden so
+        # we still produce the unhidden variant rather than silently dropping hidden bodies
+        log(f'Could not read {attr} on `{getattr(item, "name", item)}`, assuming hidden\n{traceback.format_exc()}')
+        return True
+
+def has_hidden_bodies(component) -> bool:
+    bodies = list(component.bRepBodies) + list(component.meshBodies)
+    if bodies and is_hidden(component, 'isBodiesFolderLightBulbOn'):
+        return True
+    if any(is_hidden(body) for body in bodies):
+        return True
+
+    for occurrence in component.occurrences:
+        if is_hidden(occurrence) or has_hidden_bodies(occurrence.component):
+            return True
+
+    return False
 
 def sanitize_filename(name: str) -> str:
     """
@@ -479,9 +501,13 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
                 for format in non_f3d_formats:
                     do_export(format)
                 doc.open()
-                doc.unhide_all()
-                for format in non_f3d_formats:
-                    do_export(format, UNHIDDEN_EXPORT_SUFFIX)
+                # only pay for the unhidden variants when there is actually something hidden
+                if has_hidden_bodies(doc.rootComponent):
+                    doc.unhide_all()
+                    for format in non_f3d_formats:
+                        do_export(format, UNHIDDEN_EXPORT_SUFFIX)
+                else:
+                    log(f'{file.name} v{file.versionNumber} has no hidden bodies, skipping the unhidden export')
             else:
                 for format in formats:
                     do_export(format)
