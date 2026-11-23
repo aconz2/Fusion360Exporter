@@ -16,7 +16,7 @@ data = json.loads(r'''
   "projects_folders": {
     "big long id": ["urn:adsk...."]
   },
-  "unhide_all": true,
+  "unhide_all": "yes",
   "save_sketches": false,
   "num_versions": 1
 }
