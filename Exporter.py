@@ -100,9 +100,9 @@ UNHIDDEN_EXPORT_SUFFIX = '_all_bodies'
 
 # (mode, label shown in the UI dropdown)
 UNHIDE_ALL_CHOICES = [
-    (UnhideAll.NO, 'Do not unhide'),
-    (UnhideAll.YES, 'Unhide all bodies in the export'),
-    (UnhideAll.BOTH, 'Also save a separate export with all bodies unhidden (if any are hidden)'),
+    (UnhideAll.NO, '[No] Do not unhide'),
+    (UnhideAll.YES, '[Yes] Unhide all bodies in the export'),
+    (UnhideAll.BOTH, '[Both] Also save a separate export with all bodies unhidden (if any are hidden)'),
 ]
 UNHIDE_ALL_LABEL_TO_VALUE = {label: mode.value for mode, label in UNHIDE_ALL_CHOICES}
 
