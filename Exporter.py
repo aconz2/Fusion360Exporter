@@ -16,6 +16,8 @@ from functools import partial
 import zipfile
 import base64
 from contextlib import contextmanager
+import struct
+import math
 
 # If you have a bunch of files already existing and really want the files' date-modified attr
 # to be correct but don't want to rerun an export, you can change this to True for a single run, then
@@ -346,7 +348,6 @@ def _write_mesh_body_as_stl(mesh_body, path: Path):
     are nodeCoordinates (list of Point3D) and triangleNodeIndices (flat
     list of vertex indices, 3 per triangle).
     """
-    import struct
     mesh = mesh_body.mesh  # adsk.fusion.PolygonMesh
 
     # Grab each property once: Fusion rebuilds the Python list on every access
@@ -371,7 +372,7 @@ def _write_mesh_body_as_stl(mesh_body, path: Path):
             ux, uy, uz = p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]
             vx, vy, vz = p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]
             nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
-            nlen = (nx * nx + ny * ny + nz * nz) ** 0.5
+            nlen = math.hypot(nx, ny, nz)
             if nlen > 1e-12:
                 nx, ny, nz = nx / nlen, ny / nlen, nz / nlen
             f.write(struct.pack('<3f', nx, ny, nz))    # normal

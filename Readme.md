@@ -42,6 +42,7 @@ Released versions are tagged with `YYYYMMDD.N` and can be found in the [tags pag
 8) Version Separator Is Space: Controls which character `_` or ` ` (space) is used between the name and version (ie. `name_v42.stl` or `name v42.stl`). Defaults to the original `_` and checking this will use ` ` (space) to better match Fusion.
 9) Export Non-Design Files: If true, all [non-design files](https://help.autodesk.com/view/PLM/ENU/?guid=UG-ATTTAB-ATTACHMENTS) will be exported. Note that only the latest version will be exported and the version number will not be appended.
 10) Subfolder Per Model: If true, each model's exports (all formats, versions and sketches) are saved in their own folder named after the model, ie. `<export directory>/<project name>/<document name>/<document name><version separator><version name>.<file extension>`. Files already exported without this option are not detected, so toggling it re-exports everything into the new layout.
+11) Save Mesh Bodies as STL: Exports each mesh body as a STL. See [Save Mesh Bodies](#SaveMeshBodies).
 
 The last run's settings are loaded by default (if they exist). They are stored next to the `Exporter.py` file on your file system in a file called `last_settings.json`. In "My Scripts", you can right-click "Exporter" and then "Open file location" to get there. If you rename projects or folders you will have to reselect those projects.
 
@@ -82,6 +83,15 @@ It will create a log file at `<export_directory>/<timestamp>.txt` that should ha
 Starting in version `20240813.1`, newly exported files have their `Date Modified` (or `mtime`) attribute set to the document's modified time. If you didn't want this you could replace the `set_mtime` function with a noop (ie just `pass`) or open an issue if you think this should be more configurable. However, by default it will not update the `mtime` for files that already exist which have their `mtime` corresponding to when the file was exported, not when the document was modified. If you wanted to do a one-time synchronize for these times, look at the top of source for the variable `update_existing_file_times`. I'm leaving it off by default to avoid pointlessly setting it on every run. And you would need to run the one-time synchronize with all the file formats and projects and versions etc selected that correspond to all the files you want updated.
 
 Folders' `mtime` are not handled.
+
+# Save Mesh Bodies
+
+When this option is selected, mesh bodies are saved as STL files in the same folder as where the sketches are saved. 
+
+The STL file is scaled to mm per unit. Fusion's internal unit is cm. STL has no unit metadata and the de-facto convention 
+(FreeCAD, PrusaSlicer, etc.) is mm, so the STL is scaled by 10.
+
+The normals in the STL file are computed from the vertices of the mesh body.
 
 # Limitations + Known Issues
 
