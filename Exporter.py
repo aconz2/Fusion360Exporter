@@ -87,6 +87,25 @@ FormatFromName = {x.value: x for x in Format}
 
 DEFAULT_SELECTED_FORMATS = {Format.F3D.value, Format.STEP.value}
 
+class UnhideAll(StrEnum):
+    NO = 'no'     # export only what is visible, don't unhide anything
+    YES = 'yes'   # unhide all bodies in the single export
+    BOTH = 'both' # export twice: once as-is and once (with this suffix) with all bodies unhidden
+
+UnhideAllFromName = {x.value: x for x in UnhideAll}
+
+# appended to the version number of the additional export made in UnhideAll.BOTH mode,
+# ie `model_v3_all_bodies.stp` alongside the as-is `model_v3.stp`
+UNHIDDEN_EXPORT_SUFFIX = '_all_bodies'
+
+# (mode, label shown in the UI dropdown)
+UNHIDE_ALL_CHOICES = [
+    (UnhideAll.NO, '[No] Do not unhide'),
+    (UnhideAll.YES, '[Yes] Unhide all bodies in the export'),
+    (UnhideAll.BOTH, '[Both] Also save a separate export with all bodies unhidden (if any are hidden)'),
+]
+UNHIDE_ALL_LABEL_TO_VALUE = {label: mode.value for mode, label in UNHIDE_ALL_CHOICES}
+
 archive_extensions = ['.zip', '.rar', '.gz', '.tar.gz', '.tar.bz2', '.tar.xz']
 
 class Ctx(NamedTuple):
@@ -95,7 +114,7 @@ class Ctx(NamedTuple):
     formats: List[Format]
     projects_folders: Dict[str, List[str]] # {projectId: [folderId+]} empty list is taken to mean "no filter"
     use_active_folder: bool
-    unhide_all: bool
+    unhide_all: UnhideAll
     save_sketches: bool
     num_versions: int # -1 means all versions
     export_non_design_files: bool
@@ -111,6 +130,7 @@ class Ctx(NamedTuple):
         d['folder'] = str(d['folder'])
         d['formats'] = [x.value for x in d['formats']]
         d['projects_folders'] = {k: list(v) for k, v in d['projects_folders'].items()}
+        d['unhide_all'] = d['unhide_all'].value
         return d
 
     def dumps(self):
@@ -122,6 +142,11 @@ class Ctx(NamedTuple):
         d['folder'] = Path(d['folder'])
         d['formats'] = [FormatFromName[x] for x in d['formats']]
         d['projects_folders'] = {k: set(v) for k, v in d['projects_folders'].items()}
+        # settings saved before unhide_all became a 3-way choice stored a bool
+        if isinstance(d['unhide_all'], bool):
+            d['unhide_all'] = UnhideAll.YES if d['unhide_all'] else UnhideAll.NO
+        else:
+            d['unhide_all'] = UnhideAllFromName[d['unhide_all']]
         return cls(**d)
 
     def has_show_folders(self):
@@ -218,6 +243,28 @@ def unhide_all_in_component(component):
     for occurrence in component.occurrences:
         show(occurrence)
         unhide_all_in_component(occurrence.component)
+
+def is_hidden(item, attr='isLightBulbOn') -> bool:
+    try:
+        return not getattr(item, attr)
+    except Exception:
+        # if the state can't be read (eg externally referenced components), assume hidden so
+        # we still produce the unhidden variant rather than silently dropping hidden bodies
+        log(f'Could not read {attr} on `{getattr(item, "name", item)}`, assuming hidden\n{traceback.format_exc()}')
+        return True
+
+def has_hidden_bodies(component) -> bool:
+    bodies = list(component.bRepBodies) + list(component.meshBodies)
+    if bodies and is_hidden(component, 'isBodiesFolderLightBulbOn'):
+        return True
+    if any(is_hidden(body) for body in bodies):
+        return True
+
+    for occurrence in component.occurrences:
+        if is_hidden(occurrence) or has_hidden_bodies(occurrence.component):
+            return True
+
+    return False
 
 def sanitize_filename(name: str) -> str:
     """
@@ -373,14 +420,14 @@ def tree_gen(file: adsk.core.DataFile) -> Path:
     folders.reverse()
     return Path(*folders)
 
-def export_filename(ctx: Ctx, file: adsk.core.DataFile, format: Format=None):
+def export_filename(ctx: Ctx, file: adsk.core.DataFile, format: Format=None, suffix=''):
     extension = file.fileExtension if format is None else format.value
     sanitized = sanitize_filename(file.name)
-    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}.{extension}'
+    name = f'{sanitized}{VERSION_SEPARATOR}v{file.versionNumber}{suffix}.{extension}'
     return ctx.folder / name
 
-def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
-    output_path = export_filename(ctx, doc.file, format)
+def export_file(ctx: Ctx, format: Format, doc: LazyDocument, suffix='') -> Counter:
+    output_path = export_filename(ctx, doc.file, format, suffix)
     if output_path_exists(output_path, doc.file):
         return Counter(skipped=1)
 
@@ -413,7 +460,7 @@ def export_file(ctx: Ctx, format: Format, doc: LazyDocument) -> Counter:
 
         # f3d already saves everything that is hidden and for the thumbnail to look nice, we don't want to unhide everything
         # Note that because unhiding is a mutation, the order of calls to export_file matters, but f3d will be first
-        if ctx.unhide_all and format != Format.F3D:
+        if ctx.unhide_all == UnhideAll.YES and format != Format.F3D:
             doc.unhide_all()
 
         em.execute(options)
@@ -510,14 +557,37 @@ def visit_file(ctx: Ctx, file: adsk.core.DataFile) -> Counter:
                 log(traceback.format_exc())
 
         elif file.fileExtension == 'f3d':
-            for format in ctx.formats:
-                if format == Format.PDF:
-                    continue
+            formats = [f for f in ctx.formats if f != Format.PDF]
+            non_f3d_formats = [f for f in formats if f != Format.F3D]
+
+            def do_export(format, suffix=''):
+                nonlocal counter
                 try:
-                    counter += export_file(ctx, format, doc)
+                    counter += export_file(ctx, format, doc, suffix)
                 except Exception:
                     counter.errored += 1
                     log(traceback.format_exc())
+
+            if ctx.unhide_all == UnhideAll.BOTH and non_f3d_formats:
+                # unhiding is a one-way mutation of the open document, so all as-is exports
+                # (and f3d, which includes hidden bodies and whose thumbnail is taken while
+                # still hidden) must happen before the unhide, then the unhidden variants after
+                for format in formats:
+                    if format == Format.F3D:
+                        do_export(format)
+                for format in non_f3d_formats:
+                    do_export(format)
+                doc.open()
+                # only pay for the unhidden variants when there is actually something hidden
+                if has_hidden_bodies(doc.rootComponent):
+                    doc.unhide_all()
+                    for format in non_f3d_formats:
+                        do_export(format, UNHIDDEN_EXPORT_SUFFIX)
+                else:
+                    log(f'{file.name} v{file.versionNumber} has no hidden bodies, skipping the unhidden export')
+            else:
+                for format in formats:
+                    do_export(format)
 
     return counter
 
@@ -700,8 +770,13 @@ class ExporterCommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
             populate_data_projects_list(drop, show_folders=show_folders, selected=projects)
             inputs.itemById(I.projects).isEnabled = not use_active_folder
 
-            unhide_all = last_settings.get(I.unhide_all, True)
-            inputs.addBoolValueInput(I.unhide_all, 'Unhide All Bodies', True, '', unhide_all)
+            unhide_all = last_settings.get(I.unhide_all, UnhideAll.YES.value)
+            # settings saved before this was a dropdown stored a bool
+            if isinstance(unhide_all, bool):
+                unhide_all = UnhideAll.YES.value if unhide_all else UnhideAll.NO.value
+            drop = inputs.addDropDownCommandInput(I.unhide_all, 'Unhide All Bodies', adsk.core.DropDownStyles.TextListDropDownStyle)
+            for mode, label in UNHIDE_ALL_CHOICES:
+                drop.listItems.add(label, mode.value == unhide_all)
 
             versions_group = inputs.addGroupCommandInput('group_versions', 'Versions')
             #T addIntegerSpinnerCommand(id, name, min, max, spinStep, initialValue)
@@ -787,13 +862,17 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
             iv = partial(input_value, inputs)
             isel = partial(input_selected, inputs)
 
+            # DropDownCommandInput has no .value, read the selected list item like the other dropdowns
+            selected_unhide_all = isel(I.unhide_all)
+            unhide_all_value = UNHIDE_ALL_LABEL_TO_VALUE[selected_unhide_all[0]] if selected_unhide_all else UnhideAll.YES.value
+
             save_last_settings({
                 I.directory: iv(I.directory),
                 I.file_types: isel(I.file_types),
                 I.use_active_folder : iv(I.use_active_folder),
                 I.show_folders: iv(I.show_folders),
                 I.projects: isel(I.projects),
-                I.unhide_all: iv(I.unhide_all),
+                I.unhide_all: unhide_all_value,
                 I.save_sketches: iv(I.save_sketches),
                 I.save_mesh_bodies: iv(I.save_mesh_bodies),
                 I.version_count: iv(I.version_count),
@@ -814,7 +893,7 @@ class ExporterCommandExecuteHandler(adsk.core.CommandEventHandler):
                 formats = [FormatFromName[x] for x in isel(I.file_types)],
                 use_active_folder = iv(I.use_active_folder),
                 projects_folders = make_projects_folders(inputs),
-                unhide_all = iv(I.unhide_all),
+                unhide_all = UnhideAllFromName[unhide_all_value],
                 save_sketches = iv(I.save_sketches),
                 save_mesh_bodies = iv(I.save_mesh_bodies),
                 num_versions = -1 if iv(I.all_versions) else iv(I.version_count),
